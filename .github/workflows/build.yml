@@ -54,13 +54,13 @@ jobs:
           
       - name: Build executable
         run: |
-          pyinstaller --onefile --windowed --name KlipperBuddy src/main.py
+          pyinstaller --onefile --windowed --name KlipperBuddy-Linux src/main.py
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: KlipperBuddy-Linux
-          path: dist/KlipperBuddy
+          path: dist/KlipperBuddy-Linux
           
   build-macos:
     runs-on: macos-latest
@@ -79,13 +79,13 @@ jobs:
           
       - name: Build executable
         run: |
-          pyinstaller --onefile --windowed --name KlipperBuddy src/main.py
+          pyinstaller --onefile --windowed --name KlipperBuddy-macOS src/main.py
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: KlipperBuddy-macOS
-          path: dist/KlipperBuddy
+          path: dist/KlipperBuddy-macOS
           
   release:
     needs: [build-windows, build-linux, build-macos]
@@ -118,6 +118,6 @@ jobs:
           name: KlipperBuddy Build ${{ github.run_number }}
           files: |
             windows/KlipperBuddy.exe
-            linux/KlipperBuddy
-            macos/KlipperBuddy
+            linux/KlipperBuddy-Linux
+            macos/KlipperBuddy-macOS
           generate_release_notes: true
