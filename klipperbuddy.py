@@ -1,361 +1,323 @@
 """
-KlipperBuddy - Desktop application for Klipper printer management
-All-in-one file for PyInstaller compatibility
+KlipperBuddy v3 - Cyberpunk-style Desktop Dashboard for Klipper Printers
+Inspired by Bambuddy (https://github.com/maziggy/bambuddy)
+
+Design: Black theme with Tiffany Blue (#0ABAB5) accents
+Font: Play (OFL License) for UI, ToaHI for title logo (image)
 """
 
 import sys
 import os
-import asyncio
 import json
-import logging
-import base64
+import asyncio
 import socket
-import uuid
+import time
+import webbrowser
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Callable, Optional, Dict, List
+from typing import Optional, List, Dict, Any, Deque
 from pathlib import Path
-from ipaddress import IPv4Network
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QPushButton, QLineEdit, QDialog, QDialogButtonBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QProgressBar,
+    QMessageBox, QFrame, QScrollArea, QSpinBox, QFormLayout, QGraphicsDropShadowEffect,
+    QSplitter, QGroupBox, QSizePolicy
+)
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QPointF
+from PyQt6.QtGui import (
+    QFont, QColor, QPalette, QLinearGradient, QPainter, QBrush, QPen,
+    QFontDatabase, QPixmap, QPainterPath
+)
+from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 
 import aiohttp
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QAction
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QLineEdit, QSpinBox, QTabWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QDialog, QFormLayout, QDialogButtonBox, QGroupBox,
-    QProgressBar, QFrame, QSplitter, QTextEdit, QComboBox,
-    QSystemTrayIcon, QMenu, QScrollArea, QCheckBox, QProgressDialog
-)
 
-logger = logging.getLogger(__name__)
+# =============================================================================
+# Resource Path Helper (for PyInstaller)
+# =============================================================================
 
-# ============================================================================
-# Data Models
-# ============================================================================
+def resource_path(relative_path: str) -> str:
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+
+# =============================================================================
+# Color Scheme - Cyberpunk with Tiffany Blue
+# =============================================================================
+COLORS = {
+    'bg_dark': '#0a0a0a',
+    'bg_card': '#141414',
+    'bg_card_hover': '#1a1a1a',
+    'accent': '#0ABAB5',  # Tiffany Blue
+    'accent_dark': '#088F8B',
+    'accent_glow': '#0ABAB5',
+    'text_primary': '#ffffff',
+    'text_secondary': '#888888',
+    'text_muted': '#555555',
+    'success': '#00ff88',
+    'warning': '#ffaa00',
+    'error': '#ff4444',
+    'border': '#2a2a2a',
+    'progress_bg': '#1a1a1a',
+    'temp_hotend': '#ff6b6b',
+    'temp_bed': '#ffa94d',
+    'temp_chamber': '#74c0fc',
+}
+
+STYLESHEET = f"""
+QMainWindow, QDialog {{
+    background-color: {COLORS['bg_dark']};
+}}
+
+QWidget {{
+    color: {COLORS['text_primary']};
+}}
+
+QLabel {{
+    color: {COLORS['text_primary']};
+}}
+
+QPushButton {{
+    background-color: {COLORS['bg_card']};
+    color: {COLORS['accent']};
+    border: 1px solid {COLORS['accent']};
+    border-radius: 4px;
+    padding: 8px 16px;
+    font-weight: bold;
+}}
+
+QPushButton:hover {{
+    background-color: {COLORS['accent']};
+    color: {COLORS['bg_dark']};
+}}
+
+QPushButton:pressed {{
+    background-color: {COLORS['accent_dark']};
+}}
+
+QPushButton:disabled {{
+    background-color: {COLORS['bg_card']};
+    color: {COLORS['text_muted']};
+    border-color: {COLORS['text_muted']};
+}}
+
+QLineEdit, QSpinBox {{
+    background-color: {COLORS['bg_card']};
+    color: {COLORS['text_primary']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+    padding: 8px;
+}}
+
+QLineEdit:focus, QSpinBox:focus {{
+    border-color: {COLORS['accent']};
+}}
+
+QProgressBar {{
+    background-color: {COLORS['progress_bg']};
+    border: none;
+    border-radius: 4px;
+    height: 8px;
+    text-align: center;
+}}
+
+QProgressBar::chunk {{
+    background-color: {COLORS['accent']};
+    border-radius: 4px;
+}}
+
+QScrollArea {{
+    background-color: transparent;
+    border: none;
+}}
+
+QScrollBar:vertical {{
+    background-color: {COLORS['bg_dark']};
+    width: 8px;
+    border-radius: 4px;
+}}
+
+QScrollBar::handle:vertical {{
+    background-color: {COLORS['accent']};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+
+QTableWidget {{
+    background-color: {COLORS['bg_card']};
+    gridline-color: {COLORS['border']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+}}
+
+QTableWidget::item {{
+    padding: 8px;
+}}
+
+QTableWidget::item:selected {{
+    background-color: {COLORS['accent']};
+    color: {COLORS['bg_dark']};
+}}
+
+QHeaderView::section {{
+    background-color: {COLORS['bg_dark']};
+    color: {COLORS['accent']};
+    padding: 8px;
+    border: none;
+    border-bottom: 1px solid {COLORS['accent']};
+    font-weight: bold;
+}}
+
+QCheckBox {{
+    color: {COLORS['text_primary']};
+}}
+
+QCheckBox::indicator {{
+    width: 18px;
+    height: 18px;
+    border: 1px solid {COLORS['accent']};
+    border-radius: 3px;
+    background-color: {COLORS['bg_card']};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {COLORS['accent']};
+}}
+
+QMessageBox {{
+    background-color: {COLORS['bg_dark']};
+}}
+
+QGroupBox {{
+    background-color: {COLORS['bg_card']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 8px;
+    margin-top: 12px;
+    padding-top: 8px;
+}}
+
+QGroupBox::title {{
+    color: {COLORS['accent']};
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 5px;
+}}
+
+QSplitter::handle {{
+    background-color: {COLORS['border']};
+}}
+"""
+
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class PrinterStatus:
-    """Current printer status from Moonraker"""
-    connected: bool = False
-    state: str = "unknown"
+    state: str = "offline"
     state_message: str = ""
-    filename: Optional[str] = None
-    progress: float = 0.0
-    print_duration: float = 0.0
-    total_duration: float = 0.0
-    filament_used: float = 0.0
     extruder_temp: float = 0.0
     extruder_target: float = 0.0
     bed_temp: float = 0.0
     bed_target: float = 0.0
-    position: list = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
-    speed: float = 0.0
-    speed_factor: float = 1.0
-    fan_speed: float = 0.0
+    chamber_temp: float = 0.0
+    progress: float = 0.0
+    filename: str = ""
+    print_duration: float = 0.0
+    eta_seconds: float = 0.0
     software_version: str = ""
-    hostname: str = ""
-    raw_data: dict = field(default_factory=dict)
+    last_update: float = 0.0
 
 
 @dataclass
-class PrintJob:
-    """Print job history entry"""
-    job_id: str
-    filename: str
-    status: str
-    start_time: datetime
-    end_time: Optional[datetime]
-    print_duration: float
-    total_duration: float
-    filament_used: float
-    metadata: dict = field(default_factory=dict)
+class PrinterStats:
+    total_print_time: float = 0.0  # seconds
+    total_filament: float = 0.0  # mm
+    total_jobs: int = 0
+    completed_jobs: int = 0
 
 
 @dataclass
-class GCodeFile:
-    """G-code file info"""
-    filename: str
-    path: str
-    modified: float
-    size: int
-    metadata: dict = field(default_factory=dict)
+class SystemInfo:
+    klipper_version: str = ""
+    moonraker_version: str = ""
+    os_info: str = ""
+    disk_total: int = 0  # bytes
+    disk_used: int = 0  # bytes
+    disk_free: int = 0  # bytes
+    cpu_temp: float = 0.0
+    webcam_url: str = ""
 
 
 @dataclass
 class PrinterConfig:
-    """Configuration for a Klipper printer"""
-    id: str
-    name: str
-    host: str
+    name: str = ""
+    host: str = ""
     port: int = 7125
-    api_key: Optional[str] = None
-    webcam_url: Optional[str] = None
+    api_key: str = ""
+    username: str = ""
+    password: str = ""
     enabled: bool = True
-    created_at: datetime = field(default_factory=datetime.now)
-    
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "host": self.host,
-            "port": self.port,
-            "api_key": self.api_key,
-            "webcam_url": self.webcam_url,
-            "enabled": self.enabled,
-            "created_at": self.created_at.isoformat()
-        }
-        
-    @classmethod
-    def from_dict(cls, data: dict) -> "PrinterConfig":
-        data = data.copy()
-        if "created_at" in data and isinstance(data["created_at"], str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"])
-        return cls(**data)
 
 
-@dataclass
-class DiscoveredPrinter:
-    """A printer discovered on the network"""
-    name: str
-    host: str
-    port: int
-    service_type: str = "moonraker"
-    requires_auth: bool = False
-    
-    def __hash__(self):
-        return hash((self.host, self.port))
-    
-    def __eq__(self, other):
-        if isinstance(other, DiscoveredPrinter):
-            return self.host == other.host and self.port == other.port
-        return False
+# =============================================================================
+# Configuration Manager
+# =============================================================================
 
-
-@dataclass
-class AuthCredentials:
-    """Authentication credentials for a printer"""
-    host: str
-    port: int
-    username: Optional[str] = None
-    password: Optional[str] = None
-    api_key: Optional[str] = None
-    auth_type: str = "none"
-    
-    def to_dict(self) -> dict:
-        return {
-            "host": self.host,
-            "port": self.port,
-            "username": self.username,
-            "api_key": self.api_key,
-            "auth_type": self.auth_type
-        }
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> "AuthCredentials":
-        return cls(**data)
-
-
-@dataclass
-class AppSettings:
-    """Application settings"""
-    theme: str = "dark"
-    refresh_interval: int = 2000
-    auto_connect: bool = True
-    minimize_to_tray: bool = True
-    start_minimized: bool = False
-    show_notifications: bool = True
-    language: str = "en"
-    
-    def to_dict(self) -> dict:
-        return {
-            "theme": self.theme,
-            "refresh_interval": self.refresh_interval,
-            "auto_connect": self.auto_connect,
-            "minimize_to_tray": self.minimize_to_tray,
-            "start_minimized": self.start_minimized,
-            "show_notifications": self.show_notifications,
-            "language": self.language
-        }
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> "AppSettings":
-        return cls(**{k: v for k, v in data.items() if hasattr(cls, k)})
-
-
-# ============================================================================
-# Printer Config Manager
-# ============================================================================
-
-class PrinterConfigManager:
-    """Manages printer configurations with persistence"""
-    
-    def __init__(self, config_path: str):
-        self.config_path = config_path
-        self.printers: dict[str, PrinterConfig] = {}
-        self._load()
-        
-    def _load(self):
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, "r") as f:
-                    data = json.load(f)
-                    for printer_data in data.get("printers", []):
-                        printer = PrinterConfig.from_dict(printer_data)
-                        self.printers[printer.id] = printer
-            except Exception as e:
-                print(f"Error loading config: {e}")
-                
-    def _save(self):
-        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-        data = {"printers": [p.to_dict() for p in self.printers.values()]}
-        with open(self.config_path, "w") as f:
-            json.dump(data, f, indent=2)
-            
-    def add_printer(self, printer: PrinterConfig):
-        self.printers[printer.id] = printer
-        self._save()
-        
-    def remove_printer(self, printer_id: str):
-        if printer_id in self.printers:
-            del self.printers[printer_id]
-            self._save()
-            
-    def update_printer(self, printer: PrinterConfig):
-        self.printers[printer.id] = printer
-        self._save()
-        
-    def get_printer(self, printer_id: str) -> Optional[PrinterConfig]:
-        return self.printers.get(printer_id)
-        
-    def get_all_printers(self) -> list[PrinterConfig]:
-        return list(self.printers.values())
-
-
-# ============================================================================
-# Auth Manager
-# ============================================================================
-
-class AuthManager:
-    """Manages authentication credentials for printers"""
-    
-    def __init__(self, config_dir: Optional[str] = None):
-        if config_dir is None:
-            if os.name == 'nt':
-                config_dir = os.path.join(os.environ.get('APPDATA', ''), 'KlipperBuddy')
-            else:
-                config_dir = os.path.join(os.path.expanduser('~'), '.config', 'klipperbuddy')
-        
-        self.config_dir = Path(config_dir)
+class ConfigManager:
+    def __init__(self):
+        self.config_dir = Path.home() / ".klipperbuddy"
+        self.config_file = self.config_dir / "config.json"
+        self.printers: List[PrinterConfig] = []
         self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.credentials_file = self.config_dir / 'credentials.json'
-        self._credentials: Dict[str, AuthCredentials] = {}
-        self._load_credentials()
+        self.load()
     
-    def _get_key(self, host: str, port: int) -> str:
-        return f"{host}:{port}"
-    
-    def _load_credentials(self):
-        if self.credentials_file.exists():
+    def load(self):
+        if self.config_file.exists():
             try:
-                with open(self.credentials_file, 'r') as f:
+                with open(self.config_file, 'r') as f:
                     data = json.load(f)
-                    for key, cred_data in data.items():
-                        self._credentials[key] = AuthCredentials.from_dict(cred_data)
-            except Exception as e:
-                print(f"Error loading credentials: {e}")
+                    self.printers = [PrinterConfig(**p) for p in data.get('printers', [])]
+            except:
+                self.printers = []
     
-    def _save_credentials(self):
-        try:
-            data = {key: cred.to_dict() for key, cred in self._credentials.items()}
-            with open(self.credentials_file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"Error saving credentials: {e}")
+    def save(self):
+        data = {'printers': [vars(p) for p in self.printers]}
+        with open(self.config_file, 'w') as f:
+            json.dump(data, f, indent=2)
     
-    def set_credentials(self, host: str, port: int, 
-                        username: Optional[str] = None,
-                        password: Optional[str] = None,
-                        api_key: Optional[str] = None):
-        key = self._get_key(host, port)
-        auth_type = "none"
-        if api_key:
-            auth_type = "api_key"
-        elif username and password:
-            auth_type = "basic"
-        
-        self._credentials[key] = AuthCredentials(
-            host=host, port=port, username=username,
-            password=password, api_key=api_key, auth_type=auth_type
-        )
-        self._save_credentials()
+    def add_printer(self, printer: PrinterConfig) -> bool:
+        for p in self.printers:
+            if p.host == printer.host and p.port == printer.port:
+                return False
+        self.printers.append(printer)
+        self.save()
+        return True
     
-    def get_credentials(self, host: str, port: int) -> Optional[AuthCredentials]:
-        key = self._get_key(host, port)
-        return self._credentials.get(key)
-    
-    def remove_credentials(self, host: str, port: int):
-        key = self._get_key(host, port)
-        if key in self._credentials:
-            del self._credentials[key]
-            self._save_credentials()
-    
-    def get_auth_headers(self, host: str, port: int) -> Dict[str, str]:
-        cred = self.get_credentials(host, port)
-        headers = {}
-        if cred:
-            if cred.auth_type == 'api_key' and cred.api_key:
-                headers['X-Api-Key'] = cred.api_key
-            elif cred.auth_type == 'basic' and cred.username and cred.password:
-                auth_str = f"{cred.username}:{cred.password}"
-                auth_bytes = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
-                headers['Authorization'] = f'Basic {auth_bytes}'
-        return headers
-    
-    async def test_authentication(self, host: str, port: int,
-                                   username: Optional[str] = None,
-                                   password: Optional[str] = None,
-                                   api_key: Optional[str] = None) -> tuple[bool, str]:
-        headers = {}
-        if api_key:
-            headers['X-Api-Key'] = api_key
-        elif username and password:
-            auth_str = f"{username}:{password}"
-            auth_bytes = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
-            headers['Authorization'] = f'Basic {auth_bytes}'
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = f"http://{host}:{port}/printer/info"
-                async with session.get(url, headers=headers, 
-                                       timeout=aiohttp.ClientTimeout(total=5.0)) as response:
-                    if response.status == 200:
-                        return True, "Authentication successful"
-                    elif response.status == 401:
-                        return False, "Invalid credentials"
-                    elif response.status == 403:
-                        return False, "Access forbidden"
-                    else:
-                        return False, f"Unexpected response: {response.status}"
-        except aiohttp.ClientError as e:
-            return False, f"Connection error: {str(e)}"
-        except Exception as e:
-            return False, f"Error: {str(e)}"
+    def remove_printer(self, host: str, port: int):
+        self.printers = [p for p in self.printers if not (p.host == host and p.port == port)]
+        self.save()
 
 
-
-# ============================================================================
-# Moonraker Client
-# ============================================================================
+# =============================================================================
+# Moonraker API Client
+# =============================================================================
 
 class MoonrakerClient:
-    """Async client for Moonraker API with authentication support"""
-    
-    def __init__(self, host: str, port: int = 7125, 
-                 api_key: Optional[str] = None,
-                 username: Optional[str] = None,
-                 password: Optional[str] = None):
+    def __init__(self, host: str, port: int = 7125, api_key: str = "", 
+                 username: str = "", password: str = ""):
         self.host = host
         self.port = port
         self.api_key = api_key
@@ -363,571 +325,1108 @@ class MoonrakerClient:
         self.password = password
         self.base_url = f"http://{host}:{port}"
         self._session: Optional[aiohttp.ClientSession] = None
-        self._connected = False
-        self._auth_token: Optional[str] = None
-        self._requires_auth = False
-        
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
+        self._token: Optional[str] = None
     
-    @property
-    def requires_auth(self) -> bool:
-        return self._requires_auth
-    
-    def set_credentials(self, username: Optional[str] = None, 
-                        password: Optional[str] = None,
-                        api_key: Optional[str] = None):
-        self.username = username
-        self.password = password
-        self.api_key = api_key
-        self._auth_token = None
-    
-    def _get_auth_headers(self) -> Dict[str, str]:
-        headers = {}
-        if self._auth_token:
-            headers["Authorization"] = f"Bearer {self._auth_token}"
-        elif self.api_key:
-            headers["X-Api-Key"] = self.api_key
-        elif self.username and self.password:
-            auth_str = f"{self.username}:{self.password}"
-            auth_bytes = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
-            headers["Authorization"] = f"Basic {auth_bytes}"
-        return headers
-        
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            headers = self._get_auth_headers()
+            headers = {}
+            if self.api_key:
+                headers['X-Api-Key'] = self.api_key
+            if self._token:
+                headers['Authorization'] = f'Bearer {self._token}'
             self._session = aiohttp.ClientSession(headers=headers)
         return self._session
     
-    async def _recreate_session(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
-        self._session = None
-        return await self._get_session()
-        
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
-        self._connected = False
-            
-    async def _request(self, method: str, endpoint: str, **kwargs) -> Optional[dict]:
-        session = await self._get_session()
-        url = f"{self.base_url}{endpoint}"
-        headers = kwargs.pop('headers', {})
-        headers.update(self._get_auth_headers())
-        
-        try:
-            async with session.request(method, url, headers=headers, **kwargs) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("result", data)
-                elif response.status == 401:
-                    self._requires_auth = True
-                    return None
-                else:
-                    return None
-        except Exception as e:
-            self._connected = False
-            return None
     
-    async def login(self) -> bool:
-        if not self.username or not self.password:
-            return True
-        
+    async def _request(self, method: str, endpoint: str, **kwargs) -> Optional[Dict]:
+        try:
+            session = await self._get_session()
+            url = f"{self.base_url}{endpoint}"
+            async with session.request(method, url, timeout=aiohttp.ClientTimeout(total=5), **kwargs) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                elif resp.status == 401 and self.username and self.password:
+                    if await self._authenticate():
+                        return await self._request(method, endpoint, **kwargs)
+        except:
+            pass
+        return None
+    
+    async def _authenticate(self) -> bool:
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"{self.base_url}/access/login"
-                payload = {"username": self.username, "password": self.password}
-                async with session.post(url, json=payload,
-                                        timeout=aiohttp.ClientTimeout(total=5.0)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        self._auth_token = data.get('result', {}).get('token')
-                        if self._auth_token:
-                            await self._recreate_session()
+                data = {"username": self.username, "password": self.password}
+                async with session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        self._token = result.get('result', {}).get('token')
+                        if self._token:
+                            if self._session:
+                                await self._session.close()
+                            self._session = None
                             return True
-        except Exception:
+        except:
             pass
         return False
+    
+    async def get_printer_info(self) -> Optional[Dict]:
+        return await self._request('GET', '/printer/info')
+    
+    async def get_printer_name(self) -> str:
+        """Get the best available printer name"""
+        # Try Fluidd config first
+        try:
+            resp = await self._request('GET', '/server/database/item?namespace=fluidd&key=uiSettings')
+            if resp and 'result' in resp:
+                value = resp['result'].get('value', {})
+                if isinstance(value, dict):
+                    name = value.get('general', {}).get('instanceName')
+                    if name:
+                        return name
+        except:
+            pass
+        
+        # Try Mainsail config
+        try:
+            resp = await self._request('GET', '/server/database/item?namespace=mainsail&key=general')
+            if resp and 'result' in resp:
+                value = resp['result'].get('value', {})
+                if isinstance(value, dict):
+                    name = value.get('instanceName')
+                    if name:
+                        return name
+        except:
+            pass
+        
+        # Fall back to hostname from printer info
+        info = await self.get_printer_info()
+        if info and 'result' in info:
+            hostname = info['result'].get('hostname', '')
+            if hostname:
+                return hostname
+        
+        return self.host
+    
+    async def get_status(self) -> PrinterStatus:
+        status = PrinterStatus()
+        status.last_update = time.time()
+        
+        info = await self.get_printer_info()
+        if not info or 'result' not in info:
+            status.state = 'offline'
+            return status
+        
+        result = info['result']
+        status.state = result.get('state', 'unknown')
+        status.state_message = result.get('state_message', '')
+        status.software_version = result.get('software_version', '')
+        
+        # Get printer objects
+        objects_resp = await self._request('GET', 
+            '/printer/objects/query?extruder&heater_bed&print_stats&display_status&'
+            'heater_generic%20chamber_heater&temperature_sensor%20chamber')
+        
+        if objects_resp and 'result' in objects_resp:
+            data = objects_resp['result'].get('status', {})
+            
+            ext = data.get('extruder', {})
+            status.extruder_temp = ext.get('temperature', 0.0)
+            status.extruder_target = ext.get('target', 0.0)
+            
+            bed = data.get('heater_bed', {})
+            status.bed_temp = bed.get('temperature', 0.0)
+            status.bed_target = bed.get('target', 0.0)
+            
+            chamber = data.get('heater_generic chamber_heater', data.get('temperature_sensor chamber', {}))
+            status.chamber_temp = chamber.get('temperature', 0.0)
+            
+            ps = data.get('print_stats', {})
+            ps_state = ps.get('state', '')
+            if ps_state == 'printing':
+                status.state = 'printing'
+            elif ps_state == 'paused':
+                status.state = 'paused'
+            
+            status.filename = ps.get('filename', '')
+            status.print_duration = ps.get('print_duration', 0.0)
+            
+            display = data.get('display_status', {})
+            status.progress = display.get('progress', 0.0) * 100
+            
+            if status.progress > 0 and status.print_duration > 0:
+                total_est = status.print_duration / (status.progress / 100)
+                status.eta_seconds = total_est - status.print_duration
+        
+        return status
+    
+    async def get_print_stats(self) -> PrinterStats:
+        """Get print history statistics"""
+        stats = PrinterStats()
+        
+        try:
+            resp = await self._request('GET', '/server/history/totals')
+            if resp and 'result' in resp:
+                totals = resp['result'].get('job_totals', {})
+                stats.total_print_time = totals.get('total_time', 0.0)
+                stats.total_filament = totals.get('total_filament_used', 0.0)
+                stats.total_jobs = totals.get('total_jobs', 0)
+                stats.completed_jobs = totals.get('total_jobs', 0) - totals.get('total_failed', 0)
+        except:
+            pass
+        
+        return stats
+    
+    async def get_system_info(self) -> SystemInfo:
+        """Get system information"""
+        info = SystemInfo()
+        
+        # Get Moonraker version
+        try:
+            resp = await self._request('GET', '/server/info')
+            if resp and 'result' in resp:
+                info.moonraker_version = resp['result'].get('moonraker_version', '')
+                
+                # Get webcam info
+                webcams = resp['result'].get('webcam', {})
+        except:
+            pass
+        
+        # Get Klipper version from printer info
+        try:
+            resp = await self._request('GET', '/printer/info')
+            if resp and 'result' in resp:
+                info.klipper_version = resp['result'].get('software_version', '')
+        except:
+            pass
+        
+        # Get system info (OS, CPU temp)
+        try:
+            resp = await self._request('GET', '/machine/system_info')
+            if resp and 'result' in resp:
+                sys_info = resp['result'].get('system_info', {})
+                
+                # OS info
+                distro = sys_info.get('distribution', {})
+                info.os_info = f"{distro.get('name', '')} {distro.get('version', '')}".strip()
+                
+                # CPU temp
+                cpu_temp = sys_info.get('cpu_info', {}).get('cpu_temp')
+                if cpu_temp:
+                    info.cpu_temp = cpu_temp
+        except:
+            pass
+        
+        # Get disk usage
+        try:
+            resp = await self._request('GET', '/server/files/roots')
+            if resp and 'result' in resp:
+                for root in resp['result']:
+                    if root.get('name') == 'gcodes':
+                        info.disk_total = root.get('disk_total', 0)
+                        info.disk_used = root.get('disk_used', 0)
+                        info.disk_free = root.get('disk_free', 0)
+                        break
+        except:
+            pass
+        
+        # Get webcam URL
+        try:
+            resp = await self._request('GET', '/server/webcams/list')
+            if resp and 'result' in resp:
+                webcams = resp['result'].get('webcams', [])
+                if webcams:
+                    cam = webcams[0]
+                    stream_url = cam.get('stream_url', '')
+                    if stream_url:
+                        if stream_url.startswith('/'):
+                            info.webcam_url = f"http://{self.host}{stream_url}"
+                        else:
+                            info.webcam_url = stream_url
+        except:
+            pass
+        
+        return info
     
     async def check_auth_required(self) -> bool:
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"{self.base_url}/printer/info"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=3.0)) as response:
-                    if response.status == 401:
-                        self._requires_auth = True
-                        return True
-                    elif response.status == 200:
-                        self._requires_auth = False
-                        return False
-        except Exception:
-            pass
-        return False
-            
-    async def connect(self) -> bool:
-        try:
-            await self.check_auth_required()
-            if self._requires_auth and (self.username and self.password):
-                if not await self.login():
-                    return False
-            
-            result = await self._request("GET", "/printer/info")
-            if result:
-                self._connected = True
-                return True
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                    return resp.status == 401
+        except:
             return False
-        except Exception:
-            return False
-            
-    async def get_printer_info(self) -> Optional[dict]:
-        return await self._request("GET", "/printer/info")
-        
-    async def get_printer_status(self) -> PrinterStatus:
-        status = PrinterStatus()
-        
-        info = await self.get_printer_info()
-        if info:
-            status.connected = True
-            status.state = info.get("state", "unknown")
-            status.state_message = info.get("state_message", "")
-            status.software_version = info.get("software_version", "")
-            status.hostname = info.get("hostname", "")
-        else:
-            return status
-            
-        objects = {
-            "print_stats": None, "extruder": None, "heater_bed": None,
-            "toolhead": None, "gcode_move": None, "fan": None, "virtual_sdcard": None
-        }
-        
-        result = await self._request("POST", "/printer/objects/query", json={"objects": objects})
-        
-        if result and "status" in result:
-            data = result["status"]
-            status.raw_data = data
-            
-            if "print_stats" in data:
-                ps = data["print_stats"]
-                status.filename = ps.get("filename")
-                status.print_duration = ps.get("print_duration", 0.0)
-                status.total_duration = ps.get("total_duration", 0.0)
-                status.filament_used = ps.get("filament_used", 0.0)
-            
-            if "extruder" in data:
-                ext = data["extruder"]
-                status.extruder_temp = ext.get("temperature", 0.0)
-                status.extruder_target = ext.get("target", 0.0)
-            
-            if "heater_bed" in data:
-                bed = data["heater_bed"]
-                status.bed_temp = bed.get("temperature", 0.0)
-                status.bed_target = bed.get("target", 0.0)
-            
-            if "toolhead" in data:
-                th = data["toolhead"]
-                status.position = th.get("position", [0, 0, 0, 0])
-            
-            if "gcode_move" in data:
-                gm = data["gcode_move"]
-                status.speed = gm.get("speed", 0.0)
-                status.speed_factor = gm.get("speed_factor", 1.0)
-            
-            if "fan" in data:
-                status.fan_speed = data["fan"].get("speed", 0.0)
-            
-            if "virtual_sdcard" in data:
-                status.progress = data["virtual_sdcard"].get("progress", 0.0)
-        
-        return status
-    
-    async def get_print_history(self, limit: int = 50) -> list[PrintJob]:
-        result = await self._request("GET", f"/server/history/list?limit={limit}")
-        jobs = []
-        
-        if result and "jobs" in result:
-            for job_data in result["jobs"]:
-                try:
-                    job = PrintJob(
-                        job_id=job_data.get("job_id", ""),
-                        filename=job_data.get("filename", ""),
-                        status=job_data.get("status", ""),
-                        start_time=datetime.fromtimestamp(job_data.get("start_time", 0)),
-                        end_time=datetime.fromtimestamp(job_data["end_time"]) if job_data.get("end_time") else None,
-                        print_duration=job_data.get("print_duration", 0.0),
-                        total_duration=job_data.get("total_duration", 0.0),
-                        filament_used=job_data.get("filament_used", 0.0),
-                        metadata=job_data.get("metadata", {})
-                    )
-                    jobs.append(job)
-                except Exception:
-                    continue
-        
-        return jobs
-    
-    async def get_gcode_files(self) -> list[GCodeFile]:
-        result = await self._request("GET", "/server/files/list")
-        files = []
-        
-        if result:
-            for file_data in result:
-                try:
-                    gcode_file = GCodeFile(
-                        filename=file_data.get("filename", ""),
-                        path=file_data.get("path", ""),
-                        modified=file_data.get("modified", 0.0),
-                        size=file_data.get("size", 0),
-                        metadata=file_data.get("metadata", {})
-                    )
-                    files.append(gcode_file)
-                except Exception:
-                    continue
-        
-        return files
-    
-    async def start_print(self, filename: str) -> bool:
-        result = await self._request("POST", f"/printer/print/start?filename={filename}")
-        return result is not None
-    
-    async def pause_print(self) -> bool:
-        result = await self._request("POST", "/printer/print/pause")
-        return result is not None
-    
-    async def resume_print(self) -> bool:
-        result = await self._request("POST", "/printer/print/resume")
-        return result is not None
-    
-    async def cancel_print(self) -> bool:
-        result = await self._request("POST", "/printer/print/cancel")
-        return result is not None
-    
-    async def emergency_stop(self) -> bool:
-        result = await self._request("POST", "/printer/emergency_stop")
-        return result is not None
-    
-    async def send_gcode(self, gcode: str) -> bool:
-        result = await self._request("POST", "/printer/gcode/script", json={"script": gcode})
-        return result is not None
-    
-    async def set_temperature(self, heater: str, target: float) -> bool:
-        if heater == "extruder":
-            gcode = f"SET_HEATER_TEMPERATURE HEATER=extruder TARGET={target}"
-        elif heater == "bed":
-            gcode = f"SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET={target}"
-        else:
-            return False
-        return await self.send_gcode(gcode)
-    
-    async def home(self, axes: str = "XYZ") -> bool:
-        gcode = f"G28 {axes}"
-        return await self.send_gcode(gcode)
-    
-    async def restart_firmware(self) -> bool:
-        result = await self._request("POST", "/printer/firmware_restart")
-        return result is not None
 
 
-
-# ============================================================================
+# =============================================================================
 # Network Scanner
-# ============================================================================
+# =============================================================================
 
 class NetworkScanner:
-    """Scans the local network for Klipper printers running Moonraker"""
-    
-    MOONRAKER_PORTS = [7125, 80, 443]
-    WEB_PORTS = [80, 443, 4408, 4409]
-    
-    def __init__(self):
-        self._scanning = False
-        self._cancel_scan = False
-        self._discovered_printers: List[DiscoveredPrinter] = []
-    
-    def get_local_ip(self) -> Optional[str]:
+    @staticmethod
+    def get_local_ip() -> str:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except Exception:
-            return None
+        except:
+            return "192.168.1.1"
     
-    def get_network_range(self) -> Optional[IPv4Network]:
-        local_ip = self.get_local_ip()
-        if not local_ip:
-            return None
-        parts = local_ip.split('.')
-        network_str = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-        return IPv4Network(network_str, strict=False)
+    @staticmethod
+    def get_network_range() -> List[str]:
+        local_ip = NetworkScanner.get_local_ip()
+        base = '.'.join(local_ip.split('.')[:-1])
+        return [f"{base}.{i}" for i in range(1, 255)]
     
-    async def check_moonraker(self, host: str, port: int) -> Optional[DiscoveredPrinter]:
+    @staticmethod
+    async def check_moonraker(host: str, port: int = 7125) -> Optional[Dict]:
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"http://{host}:{port}/printer/info"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=2.0)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        hostname = data.get('result', {}).get('hostname', host)
-                        return DiscoveredPrinter(
-                            name=hostname, host=host, port=port,
-                            service_type="moonraker", requires_auth=False
-                        )
-                    elif response.status == 401:
-                        return DiscoveredPrinter(
-                            name=host, host=host, port=port,
-                            service_type="moonraker", requires_auth=True
-                        )
-        except Exception:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                    if resp.status in [200, 401]:
+                        auth_required = resp.status == 401
+                        if resp.status == 200:
+                            data = await resp.json()
+                            hostname = data.get('result', {}).get('hostname', host)
+                        else:
+                            hostname = host
+                        return {
+                            'host': host,
+                            'port': port,
+                            'hostname': hostname,
+                            'auth_required': auth_required
+                        }
+        except:
             pass
         return None
-    
-    async def scan_host(self, host: str) -> List[DiscoveredPrinter]:
-        results = []
-        for port in self.MOONRAKER_PORTS:
-            printer = await self.check_moonraker(host, port)
-            if printer:
-                results.append(printer)
-                break
-        return results
-    
-    async def scan_network(self, 
-                           progress_callback: Optional[Callable[[int, int, str], None]] = None,
-                           max_concurrent: int = 50) -> List[DiscoveredPrinter]:
-        self._scanning = True
-        self._cancel_scan = False
-        self._discovered_printers = []
-        
-        network = self.get_network_range()
-        if not network:
-            self._scanning = False
-            return []
-        
-        hosts = list(network.hosts())
-        total = len(hosts)
-        
-        if progress_callback:
-            progress_callback(0, total, "Starting network scan...")
-        
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def scan_with_semaphore(host: str, index: int):
-            if self._cancel_scan:
-                return []
-            async with semaphore:
-                if progress_callback:
-                    progress_callback(index, total, f"Scanning {host}...")
-                return await self.scan_host(str(host))
-        
-        tasks = [scan_with_semaphore(str(host), i) for i, host in enumerate(hosts)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for result in results:
-            if isinstance(result, list):
-                self._discovered_printers.extend(result)
-        
-        self._discovered_printers = list(set(self._discovered_printers))
-        
-        if progress_callback:
-            progress_callback(total, total, f"Found {len(self._discovered_printers)} printer(s)")
-        
-        self._scanning = False
-        return self._discovered_printers
-    
-    def cancel_scan(self):
-        self._cancel_scan = True
-    
-    @property
-    def is_scanning(self) -> bool:
-        return self._scanning
 
 
-async def auto_discover_printers(
-    progress_callback: Optional[Callable[[int, int, str], None]] = None
-) -> List[DiscoveredPrinter]:
-    scanner = NetworkScanner()
-    return await scanner.scan_network(progress_callback)
-
-
-
-# ============================================================================
-# GUI Components
-# ============================================================================
+# =============================================================================
+# Async Worker Thread
+# =============================================================================
 
 class AsyncWorker(QThread):
-    """Worker thread for async operations"""
     finished = pyqtSignal(object)
-    error = pyqtSignal(str)
-    progress = pyqtSignal(int, int, str)
     
     def __init__(self, coro):
         super().__init__()
         self.coro = coro
-        
+    
     def run(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             result = loop.run_until_complete(self.coro)
             self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
+        finally:
+            loop.close()
 
 
-class NetworkScanDialog(QDialog):
-    """Dialog for network scanning and printer discovery"""
+# =============================================================================
+# Temperature Chart Widget
+# =============================================================================
+
+class TemperatureChart(QChartView):
+    """Real-time temperature chart with cyberpunk styling"""
+    
+    MAX_POINTS = 60  # 60 data points (3 seconds * 60 = 3 minutes of data)
+    
+    def __init__(self, parent=None):
+        self.chart = QChart()
+        super().__init__(self.chart, parent)
+        
+        self.hotend_series = QLineSeries()
+        self.hotend_series.setName("Hotend")
+        self.hotend_series.setColor(QColor(COLORS['temp_hotend']))
+        
+        self.bed_series = QLineSeries()
+        self.bed_series.setName("Bed")
+        self.bed_series.setColor(QColor(COLORS['temp_bed']))
+        
+        self.chamber_series = QLineSeries()
+        self.chamber_series.setName("Chamber")
+        self.chamber_series.setColor(QColor(COLORS['temp_chamber']))
+        
+        self.chart.addSeries(self.hotend_series)
+        self.chart.addSeries(self.bed_series)
+        self.chart.addSeries(self.chamber_series)
+        
+        # X axis (time)
+        self.axis_x = QValueAxis()
+        self.axis_x.setRange(0, self.MAX_POINTS)
+        self.axis_x.setLabelFormat("%d")
+        self.axis_x.setTitleText("Time")
+        self.axis_x.setLabelsColor(QColor(COLORS['text_secondary']))
+        self.axis_x.setTitleBrush(QBrush(QColor(COLORS['text_secondary'])))
+        self.axis_x.setGridLineColor(QColor(COLORS['border']))
+        
+        # Y axis (temperature)
+        self.axis_y = QValueAxis()
+        self.axis_y.setRange(0, 300)
+        self.axis_y.setLabelFormat("%d°C")
+        self.axis_y.setTitleText("Temperature")
+        self.axis_y.setLabelsColor(QColor(COLORS['text_secondary']))
+        self.axis_y.setTitleBrush(QBrush(QColor(COLORS['text_secondary'])))
+        self.axis_y.setGridLineColor(QColor(COLORS['border']))
+        
+        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
+        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
+        
+        self.hotend_series.attachAxis(self.axis_x)
+        self.hotend_series.attachAxis(self.axis_y)
+        self.bed_series.attachAxis(self.axis_x)
+        self.bed_series.attachAxis(self.axis_y)
+        self.chamber_series.attachAxis(self.axis_x)
+        self.chamber_series.attachAxis(self.axis_y)
+        
+        # Styling
+        self.chart.setBackgroundBrush(QBrush(QColor(COLORS['bg_card'])))
+        self.chart.setTitleBrush(QBrush(QColor(COLORS['accent'])))
+        self.chart.legend().setLabelColor(QColor(COLORS['text_primary']))
+        self.chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
+        self.chart.setMargins(QMargins(5, 5, 5, 5))
+        
+        self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.setMinimumHeight(200)
+        
+        self.data_index = 0
+        self.hotend_data: Deque[float] = deque(maxlen=self.MAX_POINTS)
+        self.bed_data: Deque[float] = deque(maxlen=self.MAX_POINTS)
+        self.chamber_data: Deque[float] = deque(maxlen=self.MAX_POINTS)
+    
+    def add_data(self, hotend: float, bed: float, chamber: float):
+        self.hotend_data.append(hotend)
+        self.bed_data.append(bed)
+        self.chamber_data.append(chamber)
+        
+        # Update series
+        self.hotend_series.clear()
+        self.bed_series.clear()
+        self.chamber_series.clear()
+        
+        for i, (h, b, c) in enumerate(zip(self.hotend_data, self.bed_data, self.chamber_data)):
+            self.hotend_series.append(i, h)
+            self.bed_series.append(i, b)
+            self.chamber_series.append(i, c)
+        
+        # Auto-scale Y axis
+        max_temp = max(max(self.hotend_data, default=0), 
+                      max(self.bed_data, default=0),
+                      max(self.chamber_data, default=0))
+        self.axis_y.setRange(0, max(300, max_temp + 20))
+    
+    def clear_data(self):
+        self.hotend_data.clear()
+        self.bed_data.clear()
+        self.chamber_data.clear()
+        self.hotend_series.clear()
+        self.bed_series.clear()
+        self.chamber_series.clear()
+
+
+# Need to import QMargins
+from PyQt6.QtCore import QMargins
+
+
+# =============================================================================
+# Printer Card Widget
+# =============================================================================
+
+class PrinterCard(QFrame):
+    """Cyberpunk-style printer status card"""
+    
+    camera_clicked = pyqtSignal(str)  # webcam_url
+    graph_clicked = pyqtSignal(object)  # self
+    
+    def __init__(self, config: PrinterConfig, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self.status = PrinterStatus()
+        self.stats = PrinterStats()
+        self.system_info = SystemInfo()
+        self.client: Optional[MoonrakerClient] = None
+        self._setup_ui()
+        self._apply_style()
+    
+    def _setup_ui(self):
+        self.setFixedSize(340, 320)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+        
+        # Header with name and status indicator
+        header = QHBoxLayout()
+        
+        self.status_indicator = QLabel("●")
+        self.status_indicator.setFont(QFont("Arial", 12))
+        header.addWidget(self.status_indicator)
+        
+        self.name_label = QLabel(self.config.name or self.config.host)
+        self.name_label.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        self.name_label.setStyleSheet(f"color: {COLORS['accent']};")
+        header.addWidget(self.name_label)
+        header.addStretch()
+        
+        self.state_label = QLabel("OFFLINE")
+        self.state_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        header.addWidget(self.state_label)
+        
+        layout.addLayout(header)
+        
+        # Separator line
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"background-color: {COLORS['accent']}; max-height: 1px;")
+        layout.addWidget(line)
+        
+        # Temperature section
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+        
+        # Extruder
+        ext_icon = QLabel("🔥")
+        ext_icon.setFont(QFont("Segoe UI Emoji", 14))
+        temp_layout.addWidget(ext_icon, 0, 0)
+        
+        ext_label = QLabel("Extruder")
+        ext_label.setFont(QFont("Play", 10))
+        ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_layout.addWidget(ext_label, 0, 1)
+        
+        self.ext_temp_label = QLabel("--°C / --°C")
+        self.ext_temp_label.setFont(QFont("Play", 11))
+        self.ext_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        temp_layout.addWidget(self.ext_temp_label, 0, 2)
+        
+        # Bed
+        bed_icon = QLabel("🛏️")
+        bed_icon.setFont(QFont("Segoe UI Emoji", 14))
+        temp_layout.addWidget(bed_icon, 1, 0)
+        
+        bed_label = QLabel("Bed")
+        bed_label.setFont(QFont("Play", 10))
+        bed_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_layout.addWidget(bed_label, 1, 1)
+        
+        self.bed_temp_label = QLabel("--°C / --°C")
+        self.bed_temp_label.setFont(QFont("Play", 11))
+        self.bed_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        temp_layout.addWidget(self.bed_temp_label, 1, 2)
+        
+        # Chamber
+        chamber_icon = QLabel("📦")
+        chamber_icon.setFont(QFont("Segoe UI Emoji", 14))
+        temp_layout.addWidget(chamber_icon, 2, 0)
+        
+        chamber_label = QLabel("Chamber")
+        chamber_label.setFont(QFont("Play", 10))
+        chamber_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_layout.addWidget(chamber_label, 2, 1)
+        
+        self.chamber_temp_label = QLabel("--°C")
+        self.chamber_temp_label.setFont(QFont("Play", 11))
+        self.chamber_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        temp_layout.addWidget(self.chamber_temp_label, 2, 2)
+        
+        layout.addLayout(temp_layout)
+        
+        # Print progress section
+        layout.addSpacing(8)
+        
+        self.filename_label = QLabel("No active print")
+        self.filename_label.setFont(QFont("Play", 10))
+        self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.filename_label.setWordWrap(True)
+        layout.addWidget(self.filename_label)
+        
+        # Progress bar
+        progress_container = QHBoxLayout()
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(8)
+        progress_container.addWidget(self.progress_bar)
+        
+        self.progress_label = QLabel("0%")
+        self.progress_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
+        self.progress_label.setStyleSheet(f"color: {COLORS['accent']};")
+        self.progress_label.setFixedWidth(45)
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        progress_container.addWidget(self.progress_label)
+        
+        layout.addLayout(progress_container)
+        
+        # ETA
+        self.eta_label = QLabel("ETA: --:--:--")
+        self.eta_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.eta_label.setFont(QFont("Play", 10))
+        layout.addWidget(self.eta_label)
+        
+        layout.addStretch()
+        
+        # Action buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        
+        self.camera_btn = QPushButton("📷")
+        self.camera_btn.setFixedSize(40, 32)
+        self.camera_btn.setToolTip("View Camera")
+        self.camera_btn.clicked.connect(self._on_camera_click)
+        btn_layout.addWidget(self.camera_btn)
+        
+        self.graph_btn = QPushButton("📈")
+        self.graph_btn.setFixedSize(40, 32)
+        self.graph_btn.setToolTip("Temperature Graph")
+        self.graph_btn.clicked.connect(self._on_graph_click)
+        btn_layout.addWidget(self.graph_btn)
+        
+        self.web_btn = QPushButton("🌐")
+        self.web_btn.setFixedSize(40, 32)
+        self.web_btn.setToolTip("Open Web Interface")
+        self.web_btn.clicked.connect(self._on_web_click)
+        btn_layout.addWidget(self.web_btn)
+        
+        btn_layout.addStretch()
+        
+        layout.addLayout(btn_layout)
+        
+        # Host info
+        self.host_label = QLabel(f"{self.config.host}:{self.config.port}")
+        self.host_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
+        layout.addWidget(self.host_label)
+    
+    def _apply_style(self):
+        self.setStyleSheet(f"""
+            PrinterCard {{
+                background-color: {COLORS['bg_card']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+            PrinterCard:hover {{
+                border-color: {COLORS['accent']};
+            }}
+        """)
+        
+        # Add glow effect
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(COLORS['accent']))
+        shadow.setOffset(0, 0)
+        self.setGraphicsEffect(shadow)
+    
+    def _on_camera_click(self):
+        if self.system_info.webcam_url:
+            self.camera_clicked.emit(self.system_info.webcam_url)
+        else:
+            # Try to open default webcam URL
+            url = f"http://{self.config.host}/webcam/?action=stream"
+            self.camera_clicked.emit(url)
+    
+    def _on_graph_click(self):
+        self.graph_clicked.emit(self)
+    
+    def _on_web_click(self):
+        url = f"http://{self.config.host}"
+        webbrowser.open(url)
+    
+    def update_status(self, status: PrinterStatus):
+        self.status = status
+        
+        # Update state indicator
+        state_colors = {
+            'ready': COLORS['success'],
+            'printing': COLORS['accent'],
+            'paused': COLORS['warning'],
+            'error': COLORS['error'],
+            'offline': COLORS['text_muted'],
+        }
+        color = state_colors.get(status.state, COLORS['text_muted'])
+        self.status_indicator.setStyleSheet(f"color: {color};")
+        self.state_label.setText(status.state.upper())
+        self.state_label.setStyleSheet(f"color: {color};")
+        
+        # Update temperatures
+        self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
+        self.bed_temp_label.setText(f"{status.bed_temp:.1f}°C / {status.bed_target:.0f}°C")
+        self.chamber_temp_label.setText(f"{status.chamber_temp:.1f}°C" if status.chamber_temp > 0 else "--°C")
+        
+        # Update print info
+        if status.filename:
+            # Truncate filename if too long
+            fn = status.filename
+            if len(fn) > 35:
+                fn = fn[:32] + "..."
+            self.filename_label.setText(fn)
+            self.filename_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        else:
+            self.filename_label.setText("No active print")
+            self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        
+        # Update progress
+        self.progress_bar.setValue(int(status.progress))
+        self.progress_label.setText(f"{status.progress:.1f}%")
+        
+        # Update ETA
+        if status.eta_seconds > 0:
+            hours = int(status.eta_seconds // 3600)
+            minutes = int((status.eta_seconds % 3600) // 60)
+            seconds = int(status.eta_seconds % 60)
+            self.eta_label.setText(f"ETA: {hours:02d}:{minutes:02d}:{seconds:02d}")
+        else:
+            self.eta_label.setText("ETA: --:--:--")
+    
+    def update_stats(self, stats: PrinterStats):
+        self.stats = stats
+    
+    def update_system_info(self, info: SystemInfo):
+        self.system_info = info
+    
+    def set_name(self, name: str):
+        self.config.name = name
+        self.name_label.setText(name)
+
+
+# =============================================================================
+# Statistics Panel Widget
+# =============================================================================
+
+class StatsPanel(QFrame):
+    """Statistics and system info panel"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Scan Network for Printers")
-        self.setMinimumSize(600, 400)
-        self.discovered_printers = []
-        self.selected_printers = []
-        self.setup_ui()
-        
-    def setup_ui(self):
+        self._setup_ui()
+        self._apply_style()
+    
+    def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         
-        info_label = QLabel(
-            "Scan your local network to automatically discover Klipper printers "
-            "running Moonraker. This may take a few moments."
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
+        # Temperature Graph
+        graph_label = QLabel("📈 TEMPERATURE GRAPH")
+        graph_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        graph_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(graph_label)
         
-        scan_layout = QHBoxLayout()
-        self.scan_btn = QPushButton("Start Scan")
-        self.scan_btn.clicked.connect(self.start_scan)
-        scan_layout.addWidget(self.scan_btn)
+        self.temp_chart = TemperatureChart()
+        layout.addWidget(self.temp_chart)
         
-        self.cancel_scan_btn = QPushButton("Cancel Scan")
+        # Current temps display
+        temp_display = QHBoxLayout()
+        
+        self.hotend_label = QLabel("Hotend: --°C")
+        self.hotend_label.setFont(QFont("Play", 10))
+        self.hotend_label.setStyleSheet(f"color: {COLORS['temp_hotend']};")
+        temp_display.addWidget(self.hotend_label)
+        
+        self.bed_label = QLabel("Bed: --°C")
+        self.bed_label.setFont(QFont("Play", 10))
+        self.bed_label.setStyleSheet(f"color: {COLORS['temp_bed']};")
+        temp_display.addWidget(self.bed_label)
+        
+        self.chamber_label = QLabel("Chamber: --°C")
+        self.chamber_label.setFont(QFont("Play", 10))
+        self.chamber_label.setStyleSheet(f"color: {COLORS['temp_chamber']};")
+        temp_display.addWidget(self.chamber_label)
+        
+        layout.addLayout(temp_display)
+        
+        # Separator
+        line1 = QFrame()
+        line1.setFrameShape(QFrame.Shape.HLine)
+        line1.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line1)
+        
+        # Camera Preview section
+        cam_label = QLabel("📷 CAMERA PREVIEW")
+        cam_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        cam_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(cam_label)
+        
+        self.camera_frame = QFrame()
+        self.camera_frame.setFixedHeight(120)
+        self.camera_frame.setStyleSheet(f"""
+            background-color: {COLORS['bg_dark']};
+            border: 1px solid {COLORS['border']};
+            border-radius: 4px;
+        """)
+        
+        cam_layout = QVBoxLayout(self.camera_frame)
+        self.camera_placeholder = QLabel("📷 Click camera button on a printer card")
+        self.camera_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.camera_placeholder.setStyleSheet(f"color: {COLORS['text_muted']};")
+        self.camera_placeholder.setFont(QFont("Play", 10))
+        cam_layout.addWidget(self.camera_placeholder)
+        
+        self.open_camera_btn = QPushButton("Open in Browser")
+        self.open_camera_btn.setEnabled(False)
+        self.open_camera_btn.clicked.connect(self._open_camera)
+        cam_layout.addWidget(self.open_camera_btn)
+        
+        layout.addWidget(self.camera_frame)
+        
+        self.current_webcam_url = ""
+        
+        # Separator
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.Shape.HLine)
+        line2.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line2)
+        
+        # Statistics section
+        stats_label = QLabel("📊 STATISTICS")
+        stats_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        stats_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(stats_label)
+        
+        stats_grid = QGridLayout()
+        stats_grid.setSpacing(8)
+        
+        # Total Print Time
+        stats_grid.addWidget(QLabel("Total Print Time:"), 0, 0)
+        self.total_time_label = QLabel("--")
+        self.total_time_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.total_time_label.setStyleSheet(f"color: {COLORS['accent']};")
+        stats_grid.addWidget(self.total_time_label, 0, 1)
+        
+        # Total Filament
+        stats_grid.addWidget(QLabel("Filament Used:"), 1, 0)
+        self.total_filament_label = QLabel("--")
+        self.total_filament_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.total_filament_label.setStyleSheet(f"color: {COLORS['accent']};")
+        stats_grid.addWidget(self.total_filament_label, 1, 1)
+        
+        # Print Count
+        stats_grid.addWidget(QLabel("Print Count:"), 2, 0)
+        self.print_count_label = QLabel("--")
+        self.print_count_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.print_count_label.setStyleSheet(f"color: {COLORS['accent']};")
+        stats_grid.addWidget(self.print_count_label, 2, 1)
+        
+        # Success Rate
+        stats_grid.addWidget(QLabel("Success Rate:"), 3, 0)
+        self.success_rate_label = QLabel("--")
+        self.success_rate_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.success_rate_label.setStyleSheet(f"color: {COLORS['success']};")
+        stats_grid.addWidget(self.success_rate_label, 3, 1)
+        
+        layout.addLayout(stats_grid)
+        
+        # Separator
+        line3 = QFrame()
+        line3.setFrameShape(QFrame.Shape.HLine)
+        line3.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line3)
+        
+        # System Info section
+        sys_label = QLabel("💻 SYSTEM INFO")
+        sys_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        sys_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(sys_label)
+        
+        sys_grid = QGridLayout()
+        sys_grid.setSpacing(4)
+        
+        sys_grid.addWidget(QLabel("Klipper:"), 0, 0)
+        self.klipper_ver_label = QLabel("--")
+        self.klipper_ver_label.setFont(QFont("Play", 9))
+        sys_grid.addWidget(self.klipper_ver_label, 0, 1)
+        
+        sys_grid.addWidget(QLabel("Moonraker:"), 1, 0)
+        self.moonraker_ver_label = QLabel("--")
+        self.moonraker_ver_label.setFont(QFont("Play", 9))
+        sys_grid.addWidget(self.moonraker_ver_label, 1, 1)
+        
+        sys_grid.addWidget(QLabel("OS:"), 2, 0)
+        self.os_label = QLabel("--")
+        self.os_label.setFont(QFont("Play", 9))
+        sys_grid.addWidget(self.os_label, 2, 1)
+        
+        layout.addLayout(sys_grid)
+        
+        # Disk usage
+        disk_layout = QHBoxLayout()
+        disk_layout.addWidget(QLabel("Disk:"))
+        self.disk_label = QLabel("-- / --")
+        self.disk_label.setFont(QFont("Play", 9))
+        disk_layout.addWidget(self.disk_label)
+        layout.addLayout(disk_layout)
+        
+        self.disk_bar = QProgressBar()
+        self.disk_bar.setRange(0, 100)
+        self.disk_bar.setValue(0)
+        self.disk_bar.setFixedHeight(8)
+        self.disk_bar.setTextVisible(False)
+        layout.addWidget(self.disk_bar)
+        
+        layout.addStretch()
+    
+    def _apply_style(self):
+        self.setStyleSheet(f"""
+            StatsPanel {{
+                background-color: {COLORS['bg_card']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+    
+    def _open_camera(self):
+        if self.current_webcam_url:
+            webbrowser.open(self.current_webcam_url)
+    
+    def set_webcam_url(self, url: str):
+        self.current_webcam_url = url
+        self.camera_placeholder.setText(f"📷 {url[:40]}..." if len(url) > 40 else f"📷 {url}")
+        self.open_camera_btn.setEnabled(True)
+    
+    def update_temps(self, hotend: float, bed: float, chamber: float):
+        self.temp_chart.add_data(hotend, bed, chamber)
+        self.hotend_label.setText(f"Hotend: {hotend:.1f}°C")
+        self.bed_label.setText(f"Bed: {bed:.1f}°C")
+        self.chamber_label.setText(f"Chamber: {chamber:.1f}°C" if chamber > 0 else "Chamber: --°C")
+    
+    def update_stats(self, stats: PrinterStats):
+        # Format print time
+        hours = int(stats.total_print_time // 3600)
+        self.total_time_label.setText(f"{hours:,}h")
+        
+        # Format filament (mm to meters/kg)
+        meters = stats.total_filament / 1000
+        if meters > 1000:
+            kg = meters * 0.003  # Approximate: 1m of 1.75mm filament ≈ 3g
+            self.total_filament_label.setText(f"{kg:.1f} kg")
+        else:
+            self.total_filament_label.setText(f"{meters:.1f} m")
+        
+        # Print count
+        self.print_count_label.setText(f"{stats.total_jobs:,}")
+        
+        # Success rate
+        if stats.total_jobs > 0:
+            rate = (stats.completed_jobs / stats.total_jobs) * 100
+            self.success_rate_label.setText(f"{rate:.1f}%")
+        else:
+            self.success_rate_label.setText("--")
+    
+    def update_system_info(self, info: SystemInfo):
+        # Versions
+        if info.klipper_version:
+            ver = info.klipper_version.split('-')[0] if '-' in info.klipper_version else info.klipper_version
+            self.klipper_ver_label.setText(ver[:20])
+        
+        if info.moonraker_version:
+            ver = info.moonraker_version.split('-')[0] if '-' in info.moonraker_version else info.moonraker_version
+            self.moonraker_ver_label.setText(ver[:20])
+        
+        if info.os_info:
+            self.os_label.setText(info.os_info[:25])
+        
+        # Disk usage
+        if info.disk_total > 0:
+            used_gb = info.disk_used / (1024**3)
+            total_gb = info.disk_total / (1024**3)
+            self.disk_label.setText(f"{used_gb:.1f} GB / {total_gb:.1f} GB")
+            
+            percent = (info.disk_used / info.disk_total) * 100
+            self.disk_bar.setValue(int(percent))
+    
+    def clear(self):
+        self.temp_chart.clear_data()
+        self.hotend_label.setText("Hotend: --°C")
+        self.bed_label.setText("Bed: --°C")
+        self.chamber_label.setText("Chamber: --°C")
+        self.total_time_label.setText("--")
+        self.total_filament_label.setText("--")
+        self.print_count_label.setText("--")
+        self.success_rate_label.setText("--")
+        self.klipper_ver_label.setText("--")
+        self.moonraker_ver_label.setText("--")
+        self.os_label.setText("--")
+        self.disk_label.setText("-- / --")
+        self.disk_bar.setValue(0)
+        self.camera_placeholder.setText("📷 Click camera button on a printer card")
+        self.open_camera_btn.setEnabled(False)
+        self.current_webcam_url = ""
+
+
+# =============================================================================
+# Network Scanner Dialog
+# =============================================================================
+
+class ScanDialog(QDialog):
+    """Network scanner dialog with cyberpunk styling"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("⚡ Scan Network for Printers")
+        self.setFixedSize(700, 500)
+        self.discovered = []
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        
+        # Header
+        header = QLabel("🔍 Network Scanner")
+        header.setFont(QFont("Play", 16, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(header)
+        
+        desc = QLabel("Scan your local network to discover Klipper printers running Moonraker.")
+        desc.setFont(QFont("Play", 10))
+        desc.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        layout.addWidget(desc)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        
+        self.scan_btn = QPushButton("⚡ Start Scan")
+        self.scan_btn.clicked.connect(self._start_scan)
+        btn_layout.addWidget(self.scan_btn)
+        
+        self.cancel_scan_btn = QPushButton("Stop")
         self.cancel_scan_btn.setEnabled(False)
-        self.cancel_scan_btn.clicked.connect(self.cancel_scan)
-        scan_layout.addWidget(self.cancel_scan_btn)
+        self.cancel_scan_btn.clicked.connect(self._cancel_scan)
+        btn_layout.addWidget(self.cancel_scan_btn)
         
-        scan_layout.addStretch()
-        layout.addLayout(scan_layout)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
         
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        # Progress
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
         
-        self.status_label = QLabel("")
+        self.status_label = QLabel("Ready to scan")
+        self.status_label.setFont(QFont("Play", 10))
+        self.status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(self.status_label)
         
+        # Results table
         self.table = QTableWidget()
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Select", "Name", "Host", "Port", "Auth Required"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.setHorizontalHeaderLabels(["Select", "Name", "Host", "Port", "Auth"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 60)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
         
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
+        # Dialog buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         
-    def start_scan(self):
+        self._scanning = False
+        self._scan_worker = None
+    
+    def _start_scan(self):
+        self._scanning = True
         self.scan_btn.setEnabled(False)
         self.cancel_scan_btn.setEnabled(True)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 254)
-        self.status_label.setText("Scanning network...")
         self.table.setRowCount(0)
+        self.discovered = []
+        self.progress.setValue(0)
+        self.status_label.setText("Scanning network...")
         
-        self.scanner = NetworkScanner()
+        async def scan():
+            hosts = NetworkScanner.get_network_range()
+            results = []
+            total = len(hosts)
+            
+            for i, host in enumerate(hosts):
+                if not self._scanning:
+                    break
+                
+                result = await NetworkScanner.check_moonraker(host)
+                if result:
+                    # Get printer name
+                    client = MoonrakerClient(host, result['port'])
+                    name = await client.get_printer_name()
+                    await client.close()
+                    result['name'] = name
+                    results.append(result)
+                
+                progress = int((i + 1) / total * 100)
+                self.progress.setValue(progress)
+            
+            return results
         
-        async def scan_with_progress():
-            return await self.scanner.scan_network()
-        
-        self.worker = AsyncWorker(scan_with_progress())
-        self.worker.finished.connect(self._on_scan_finished)
-        self.worker.error.connect(self._on_scan_error)
-        self.worker.start()
-        
-        self.progress_timer = QTimer()
-        self.progress_timer.timeout.connect(self._update_progress)
-        self.progress_timer.start(100)
-        
-    def _update_progress(self):
-        if hasattr(self, 'scanner') and self.scanner.is_scanning:
-            current = self.progress_bar.value()
-            if current < 250:
-                self.progress_bar.setValue(current + 1)
-        
-    def cancel_scan(self):
-        if hasattr(self, 'scanner'):
-            self.scanner.cancel_scan()
+        self._scan_worker = AsyncWorker(scan())
+        self._scan_worker.finished.connect(self._on_scan_complete)
+        self._scan_worker.start()
+    
+    def _cancel_scan(self):
+        self._scanning = False
         self.status_label.setText("Scan cancelled")
-        self.scan_btn.setEnabled(True)
-        self.cancel_scan_btn.setEnabled(False)
-        if hasattr(self, 'progress_timer'):
-            self.progress_timer.stop()
-        
-    def _on_scan_finished(self, printers):
-        if hasattr(self, 'progress_timer'):
-            self.progress_timer.stop()
-        
-        self.discovered_printers = printers
-        self.progress_bar.setValue(254)
+    
+    def _on_scan_complete(self, results):
+        self._scanning = False
         self.scan_btn.setEnabled(True)
         self.cancel_scan_btn.setEnabled(False)
         
-        if not printers:
-            self.status_label.setText("No printers found on the network")
-            return
-            
-        self.status_label.setText(f"Found {len(printers)} printer(s)")
-        self.table.setRowCount(len(printers))
+        self.discovered = results
         
-        for row, printer in enumerate(printers):
-            checkbox = QCheckBox()
-            checkbox.setChecked(True)
-            self.table.setCellWidget(row, 0, checkbox)
-            self.table.setItem(row, 1, QTableWidgetItem(printer.name))
-            self.table.setItem(row, 2, QTableWidgetItem(printer.host))
-            self.table.setItem(row, 3, QTableWidgetItem(str(printer.port)))
-            self.table.setItem(row, 4, QTableWidgetItem("Yes" if printer.requires_auth else "No"))
-            
-    def _on_scan_error(self, error):
-        if hasattr(self, 'progress_timer'):
-            self.progress_timer.stop()
-        self.status_label.setText(f"Scan error: {error}")
-        self.scan_btn.setEnabled(True)
-        self.cancel_scan_btn.setEnabled(False)
+        self.table.setRowCount(len(results))
+        for i, r in enumerate(results):
+            cb = QCheckBox()
+            cb.setChecked(True)
+            self.table.setCellWidget(i, 0, cb)
+            self.table.setItem(i, 1, QTableWidgetItem(r['name']))
+            self.table.setItem(i, 2, QTableWidgetItem(r['host']))
+            self.table.setItem(i, 3, QTableWidgetItem(str(r['port'])))
+            self.table.setItem(i, 4, QTableWidgetItem("Yes" if r['auth_required'] else "No"))
         
-    def get_selected_printers(self):
+        self.status_label.setText(f"Found {len(results)} printer(s)")
+        self.progress.setValue(100)
+    
+    def get_selected_printers(self) -> List[Dict]:
         selected = []
-        for row in range(self.table.rowCount()):
-            checkbox = self.table.cellWidget(row, 0)
-            if checkbox and checkbox.isChecked():
-                selected.append(self.discovered_printers[row])
+        for i in range(self.table.rowCount()):
+            cb = self.table.cellWidget(i, 0)
+            if cb and cb.isChecked():
+                selected.append(self.discovered[i])
         return selected
 
 
+# =============================================================================
+# Add Printer Dialog
+# =============================================================================
+
 class AddPrinterDialog(QDialog):
-    """Dialog for adding a new printer with authentication support"""
-    
-    def __init__(self, parent=None, printer: Optional[PrinterConfig] = None):
+    def __init__(self, parent=None, prefill: Dict = None):
         super().__init__(parent)
-        self.printer = printer
-        self.auth_manager = AuthManager()
-        self.setWindowTitle("Add Printer" if not printer else "Edit Printer")
-        self.setMinimumWidth(450)
-        self.setup_ui()
-        
-    def setup_ui(self):
+        self.setWindowTitle("➕ Add Printer")
+        self.setFixedSize(400, 350)
+        self._setup_ui(prefill)
+    
+    def _setup_ui(self, prefill: Dict = None):
         layout = QFormLayout(self)
+        layout.setSpacing(12)
+        
+        header = QLabel("Add Klipper Printer")
+        header.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addRow(header)
         
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("My Voron 2.4")
+        self.name_edit.setPlaceholderText("My Printer")
         layout.addRow("Name:", self.name_edit)
         
         self.host_edit = QLineEdit()
-        self.host_edit.setPlaceholderText("192.168.1.100 or voron.local")
+        self.host_edit.setPlaceholderText("192.168.1.100")
         layout.addRow("Host:", self.host_edit)
         
         self.port_spin = QSpinBox()
@@ -935,720 +1434,341 @@ class AddPrinterDialog(QDialog):
         self.port_spin.setValue(7125)
         layout.addRow("Port:", self.port_spin)
         
-        auth_group = QGroupBox("Authentication (for Fluidd/Mainsail)")
-        auth_layout = QFormLayout(auth_group)
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setPlaceholderText("Optional")
+        layout.addRow("API Key:", self.api_key_edit)
         
         self.username_edit = QLineEdit()
-        self.username_edit.setPlaceholderText("Optional - for protected instances")
-        auth_layout.addRow("Username:", self.username_edit)
+        self.username_edit.setPlaceholderText("Optional")
+        layout.addRow("Username:", self.username_edit)
         
         self.password_edit = QLineEdit()
-        self.password_edit.setPlaceholderText("Optional")
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        auth_layout.addRow("Password:", self.password_edit)
+        self.password_edit.setPlaceholderText("Optional")
+        layout.addRow("Password:", self.password_edit)
         
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setPlaceholderText("Alternative to username/password")
-        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        auth_layout.addRow("API Key:", self.api_key_edit)
+        if prefill:
+            self.name_edit.setText(prefill.get('name', ''))
+            self.host_edit.setText(prefill.get('host', ''))
+            self.port_spin.setValue(prefill.get('port', 7125))
         
-        layout.addRow(auth_group)
-        
-        self.webcam_edit = QLineEdit()
-        self.webcam_edit.setPlaceholderText("http://192.168.1.100/webcam/?action=stream")
-        layout.addRow("Webcam URL:", self.webcam_edit)
-        
-        test_layout = QHBoxLayout()
-        self.test_btn = QPushButton("Test Connection")
-        self.test_btn.clicked.connect(self.test_connection)
-        test_layout.addWidget(self.test_btn)
-        
-        self.test_auth_btn = QPushButton("Test Auth")
-        self.test_auth_btn.clicked.connect(self.test_authentication)
-        test_layout.addWidget(self.test_auth_btn)
-        layout.addRow("", test_layout)
-        
-        self.status_label = QLabel("")
-        layout.addRow("", self.status_label)
-        
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
-        
-        if self.printer:
-            self.name_edit.setText(self.printer.name)
-            self.host_edit.setText(self.printer.host)
-            self.port_spin.setValue(self.printer.port)
-            if self.printer.api_key:
-                self.api_key_edit.setText(self.printer.api_key)
-            if self.printer.webcam_url:
-                self.webcam_edit.setText(self.printer.webcam_url)
-            
-            cred = self.auth_manager.get_credentials(self.printer.host, self.printer.port)
-            if cred:
-                if cred.username:
-                    self.username_edit.setText(cred.username)
-                if cred.api_key:
-                    self.api_key_edit.setText(cred.api_key)
     
-    def test_connection(self):
-        host = self.host_edit.text().strip()
-        port = self.port_spin.value()
-        
-        if not host:
-            self.status_label.setText("Please enter a host")
-            return
-        
-        self.status_label.setText("Testing connection...")
-        self.test_btn.setEnabled(False)
-        
-        async def test():
-            client = MoonrakerClient(host, port)
-            return await client.connect()
-        
-        self.test_worker = AsyncWorker(test())
-        self.test_worker.finished.connect(self._on_test_finished)
-        self.test_worker.error.connect(self._on_test_error)
-        self.test_worker.start()
-    
-    def _on_test_finished(self, success):
-        self.test_btn.setEnabled(True)
-        if success:
-            self.status_label.setText("Connection successful!")
-            self.status_label.setStyleSheet("color: green;")
-        else:
-            self.status_label.setText("Connection failed")
-            self.status_label.setStyleSheet("color: red;")
-    
-    def _on_test_error(self, error):
-        self.test_btn.setEnabled(True)
-        self.status_label.setText(f"Error: {error}")
-        self.status_label.setStyleSheet("color: red;")
-    
-    def test_authentication(self):
-        host = self.host_edit.text().strip()
-        port = self.port_spin.value()
-        username = self.username_edit.text().strip() or None
-        password = self.password_edit.text() or None
-        api_key = self.api_key_edit.text().strip() or None
-        
-        if not host:
-            self.status_label.setText("Please enter a host")
-            return
-        
-        self.status_label.setText("Testing authentication...")
-        self.test_auth_btn.setEnabled(False)
-        
-        async def test():
-            return await self.auth_manager.test_authentication(
-                host, port, username, password, api_key
-            )
-        
-        self.auth_worker = AsyncWorker(test())
-        self.auth_worker.finished.connect(self._on_auth_test_finished)
-        self.auth_worker.error.connect(self._on_auth_test_error)
-        self.auth_worker.start()
-    
-    def _on_auth_test_finished(self, result):
-        self.test_auth_btn.setEnabled(True)
-        success, message = result
-        self.status_label.setText(message)
-        self.status_label.setStyleSheet("color: green;" if success else "color: red;")
-    
-    def _on_auth_test_error(self, error):
-        self.test_auth_btn.setEnabled(True)
-        self.status_label.setText(f"Error: {error}")
-        self.status_label.setStyleSheet("color: red;")
-    
-    def get_printer_config(self) -> Optional[PrinterConfig]:
-        name = self.name_edit.text().strip()
-        host = self.host_edit.text().strip()
-        port = self.port_spin.value()
-        api_key = self.api_key_edit.text().strip() or None
-        webcam_url = self.webcam_edit.text().strip() or None
-        
-        if not name or not host:
-            return None
-        
-        printer_id = self.printer.id if self.printer else str(uuid.uuid4())
-        
-        username = self.username_edit.text().strip() or None
-        password = self.password_edit.text() or None
-        
-        if username or password or api_key:
-            self.auth_manager.set_credentials(host, port, username, password, api_key)
-        
+    def get_config(self) -> PrinterConfig:
         return PrinterConfig(
-            id=printer_id, name=name, host=host, port=port,
-            api_key=api_key, webcam_url=webcam_url
+            name=self.name_edit.text() or self.host_edit.text(),
+            host=self.host_edit.text(),
+            port=self.port_spin.value(),
+            api_key=self.api_key_edit.text(),
+            username=self.username_edit.text(),
+            password=self.password_edit.text(),
+            enabled=True
         )
 
 
-
-# ============================================================================
+# =============================================================================
 # Main Window
-# ============================================================================
+# =============================================================================
 
 class MainWindow(QMainWindow):
-    """Main application window"""
-    
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("KlipperBuddy")
-        self.setMinimumSize(1000, 700)
+        self.setWindowTitle("⚡ KlipperBuddy")
+        self.setMinimumSize(1400, 800)
         
-        # Initialize managers
-        config_dir = self._get_config_dir()
-        self.config_manager = PrinterConfigManager(os.path.join(config_dir, "printers.json"))
-        self.auth_manager = AuthManager(config_dir)
+        self.config_manager = ConfigManager()
+        self.printer_cards: Dict[str, PrinterCard] = {}
+        self.update_workers: List[AsyncWorker] = []
+        self.selected_printer: Optional[PrinterCard] = None
         
-        # Printer clients
-        self.clients: Dict[str, MoonrakerClient] = {}
-        self.current_printer_id: Optional[str] = None
+        self._setup_ui()
+        self._load_printers()
         
-        # Setup UI
-        self.setup_ui()
-        self.setup_tray()
-        
-        # Start refresh timer
+        # Auto-refresh timer
         self.refresh_timer = QTimer()
-        self.refresh_timer.timeout.connect(self.refresh_status)
-        self.refresh_timer.start(2000)
-        
-        # Load printers
-        self.load_printers()
-        
-        # Auto-scan on first launch if no printers
-        if not self.config_manager.get_all_printers():
-            QTimer.singleShot(500, self.show_scan_dialog)
+        self.refresh_timer.timeout.connect(self._refresh_all_status)
+        self.refresh_timer.start(3000)  # Refresh every 3 seconds
     
-    def _get_config_dir(self) -> str:
-        if os.name == 'nt':
-            return os.path.join(os.environ.get('APPDATA', ''), 'KlipperBuddy')
-        else:
-            return os.path.join(os.path.expanduser('~'), '.config', 'klipperbuddy')
-    
-    def setup_ui(self):
+    def _setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
         
-        # Left panel - Printer list
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_panel.setMaximumWidth(250)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
         
-        # Printer list header
+        # Header
         header_layout = QHBoxLayout()
-        header_layout.addWidget(QLabel("Printers"))
         
-        scan_btn = QPushButton("Scan")
-        scan_btn.clicked.connect(self.show_scan_dialog)
-        header_layout.addWidget(scan_btn)
+        # Logo image
+        logo_path = resource_path("title_logo.png")
+        if os.path.exists(logo_path):
+            logo_pixmap = QPixmap(logo_path)
+            logo_label = QLabel()
+            logo_label.setPixmap(logo_pixmap.scaledToHeight(40, Qt.TransformationMode.SmoothTransformation))
+            header_layout.addWidget(logo_label)
+        else:
+            # Fallback text title
+            title = QLabel("⚡ KLIPPERBUDDY")
+            title.setFont(QFont("Play", 24, QFont.Weight.Bold))
+            title.setStyleSheet(f"color: {COLORS['accent']};")
+            header_layout.addWidget(title)
         
-        add_btn = QPushButton("+")
-        add_btn.setMaximumWidth(30)
-        add_btn.clicked.connect(self.add_printer)
-        header_layout.addWidget(add_btn)
+        subtitle = QLabel("Klipper Printer Dashboard")
+        subtitle.setFont(QFont("Play", 12))
+        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; margin-left: 10px;")
+        header_layout.addWidget(subtitle)
         
-        left_layout.addLayout(header_layout)
+        header_layout.addStretch()
         
-        # Printer list
-        self.printer_list = QTableWidget()
-        self.printer_list.setColumnCount(2)
-        self.printer_list.setHorizontalHeaderLabels(["Name", "Status"])
-        self.printer_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.printer_list.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.printer_list.itemSelectionChanged.connect(self.on_printer_selected)
-        left_layout.addWidget(self.printer_list)
+        # Buttons
+        self.scan_btn = QPushButton("🔍 Scan Network")
+        self.scan_btn.clicked.connect(self._show_scan_dialog)
+        header_layout.addWidget(self.scan_btn)
         
-        layout.addWidget(left_panel)
+        self.add_btn = QPushButton("➕ Add Printer")
+        self.add_btn.clicked.connect(self._show_add_dialog)
+        header_layout.addWidget(self.add_btn)
         
-        # Right panel - Tabs
-        self.tabs = QTabWidget()
+        self.refresh_btn = QPushButton("🔄 Refresh")
+        self.refresh_btn.clicked.connect(self._refresh_all_status)
+        header_layout.addWidget(self.refresh_btn)
         
-        # Status tab
-        self.status_tab = QWidget()
-        self.setup_status_tab()
-        self.tabs.addTab(self.status_tab, "Status")
+        main_layout.addLayout(header_layout)
         
-        # Control tab
-        self.control_tab = QWidget()
-        self.setup_control_tab()
-        self.tabs.addTab(self.control_tab, "Control")
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        main_layout.addWidget(line)
         
-        # Files tab
-        self.files_tab = QWidget()
-        self.setup_files_tab()
-        self.tabs.addTab(self.files_tab, "Files")
+        # Main content area with splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # History tab
-        self.history_tab = QWidget()
-        self.setup_history_tab()
-        self.tabs.addTab(self.history_tab, "History")
+        # Left side - Printer cards area
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
-        layout.addWidget(self.tabs)
+        cards_label = QLabel("PRINTERS")
+        cards_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        cards_label.setStyleSheet(f"color: {COLORS['accent']};")
+        left_layout.addWidget(cards_label)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        self.cards_container = QWidget()
+        self.cards_layout = QGridLayout(self.cards_container)
+        self.cards_layout.setSpacing(16)
+        self.cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        
+        scroll.setWidget(self.cards_container)
+        left_layout.addWidget(scroll)
+        
+        splitter.addWidget(left_widget)
+        
+        # Right side - Stats panel
+        self.stats_panel = StatsPanel()
+        self.stats_panel.setMinimumWidth(350)
+        self.stats_panel.setMaximumWidth(400)
+        splitter.addWidget(self.stats_panel)
+        
+        splitter.setSizes([900, 350])
+        
+        main_layout.addWidget(splitter)
+        
+        # Status bar
+        self.status_label = QLabel("Ready")
+        self.status_label.setFont(QFont("Play", 9))
+        self.status_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        main_layout.addWidget(self.status_label)
     
-    def setup_status_tab(self):
-        layout = QVBoxLayout(self.status_tab)
-        
-        # Status info
-        info_group = QGroupBox("Printer Status")
-        info_layout = QGridLayout(info_group)
-        
-        self.state_label = QLabel("Not Connected")
-        self.state_label.setFont(QFont("", 14, QFont.Weight.Bold))
-        info_layout.addWidget(QLabel("State:"), 0, 0)
-        info_layout.addWidget(self.state_label, 0, 1)
-        
-        self.file_label = QLabel("-")
-        info_layout.addWidget(QLabel("File:"), 1, 0)
-        info_layout.addWidget(self.file_label, 1, 1)
-        
-        self.progress_bar = QProgressBar()
-        info_layout.addWidget(QLabel("Progress:"), 2, 0)
-        info_layout.addWidget(self.progress_bar, 2, 1)
-        
-        layout.addWidget(info_group)
-        
-        # Temperatures
-        temp_group = QGroupBox("Temperatures")
-        temp_layout = QGridLayout(temp_group)
-        
-        self.extruder_label = QLabel("0°C / 0°C")
-        temp_layout.addWidget(QLabel("Extruder:"), 0, 0)
-        temp_layout.addWidget(self.extruder_label, 0, 1)
-        
-        self.bed_label = QLabel("0°C / 0°C")
-        temp_layout.addWidget(QLabel("Bed:"), 1, 0)
-        temp_layout.addWidget(self.bed_label, 1, 1)
-        
-        layout.addWidget(temp_group)
-        
-        # Position
-        pos_group = QGroupBox("Position")
-        pos_layout = QGridLayout(pos_group)
-        
-        self.position_label = QLabel("X: 0  Y: 0  Z: 0")
-        pos_layout.addWidget(self.position_label, 0, 0)
-        
-        self.speed_label = QLabel("Speed: 0 mm/s")
-        pos_layout.addWidget(self.speed_label, 0, 1)
-        
-        layout.addWidget(pos_group)
-        
-        layout.addStretch()
+    def _load_printers(self):
+        for printer in self.config_manager.printers:
+            self._add_printer_card(printer)
+        self._refresh_all_status()
     
-    def setup_control_tab(self):
-        layout = QVBoxLayout(self.control_tab)
-        
-        # Print controls
-        print_group = QGroupBox("Print Control")
-        print_layout = QHBoxLayout(print_group)
-        
-        self.pause_btn = QPushButton("Pause")
-        self.pause_btn.clicked.connect(self.pause_print)
-        print_layout.addWidget(self.pause_btn)
-        
-        self.resume_btn = QPushButton("Resume")
-        self.resume_btn.clicked.connect(self.resume_print)
-        print_layout.addWidget(self.resume_btn)
-        
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.cancel_print)
-        print_layout.addWidget(self.cancel_btn)
-        
-        layout.addWidget(print_group)
-        
-        # Temperature controls
-        temp_group = QGroupBox("Temperature Control")
-        temp_layout = QGridLayout(temp_group)
-        
-        temp_layout.addWidget(QLabel("Extruder:"), 0, 0)
-        self.extruder_temp_spin = QSpinBox()
-        self.extruder_temp_spin.setRange(0, 350)
-        temp_layout.addWidget(self.extruder_temp_spin, 0, 1)
-        
-        set_ext_btn = QPushButton("Set")
-        set_ext_btn.clicked.connect(lambda: self.set_temperature("extruder", self.extruder_temp_spin.value()))
-        temp_layout.addWidget(set_ext_btn, 0, 2)
-        
-        temp_layout.addWidget(QLabel("Bed:"), 1, 0)
-        self.bed_temp_spin = QSpinBox()
-        self.bed_temp_spin.setRange(0, 150)
-        temp_layout.addWidget(self.bed_temp_spin, 1, 1)
-        
-        set_bed_btn = QPushButton("Set")
-        set_bed_btn.clicked.connect(lambda: self.set_temperature("bed", self.bed_temp_spin.value()))
-        temp_layout.addWidget(set_bed_btn, 1, 2)
-        
-        layout.addWidget(temp_group)
-        
-        # Movement controls
-        move_group = QGroupBox("Movement")
-        move_layout = QGridLayout(move_group)
-        
-        home_btn = QPushButton("Home All")
-        home_btn.clicked.connect(lambda: self.send_gcode("G28"))
-        move_layout.addWidget(home_btn, 0, 0, 1, 3)
-        
-        layout.addWidget(move_group)
-        
-        # Emergency stop
-        estop_btn = QPushButton("EMERGENCY STOP")
-        estop_btn.setStyleSheet("background-color: red; color: white; font-weight: bold; padding: 10px;")
-        estop_btn.clicked.connect(self.emergency_stop)
-        layout.addWidget(estop_btn)
-        
-        layout.addStretch()
-    
-    def setup_files_tab(self):
-        layout = QVBoxLayout(self.files_tab)
-        
-        refresh_btn = QPushButton("Refresh Files")
-        refresh_btn.clicked.connect(self.load_files)
-        layout.addWidget(refresh_btn)
-        
-        self.files_table = QTableWidget()
-        self.files_table.setColumnCount(3)
-        self.files_table.setHorizontalHeaderLabels(["Filename", "Size", "Modified"])
-        self.files_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.files_table.doubleClicked.connect(self.start_selected_print)
-        layout.addWidget(self.files_table)
-    
-    def setup_history_tab(self):
-        layout = QVBoxLayout(self.history_tab)
-        
-        refresh_btn = QPushButton("Refresh History")
-        refresh_btn.clicked.connect(self.load_history)
-        layout.addWidget(refresh_btn)
-        
-        self.history_table = QTableWidget()
-        self.history_table.setColumnCount(5)
-        self.history_table.setHorizontalHeaderLabels(["Filename", "Status", "Duration", "Filament", "Date"])
-        self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.history_table)
-    
-    def setup_tray(self):
-        self.tray_icon = QSystemTrayIcon(self)
-        
-        tray_menu = QMenu()
-        show_action = tray_menu.addAction("Show")
-        show_action.triggered.connect(self.show)
-        quit_action = tray_menu.addAction("Quit")
-        quit_action.triggered.connect(QApplication.quit)
-        
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self.on_tray_activated)
-        self.tray_icon.show()
-    
-    def on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.show()
-            self.activateWindow()
-    
-    def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-    
-    def load_printers(self):
-        self.printer_list.setRowCount(0)
-        printers = self.config_manager.get_all_printers()
-        
-        for printer in printers:
-            row = self.printer_list.rowCount()
-            self.printer_list.insertRow(row)
-            self.printer_list.setItem(row, 0, QTableWidgetItem(printer.name))
-            self.printer_list.setItem(row, 1, QTableWidgetItem("Connecting..."))
-            
-            # Create client
-            cred = self.auth_manager.get_credentials(printer.host, printer.port)
-            client = MoonrakerClient(
-                printer.host, printer.port,
-                api_key=cred.api_key if cred else printer.api_key,
-                username=cred.username if cred else None,
-                password=cred.password if cred else None
-            )
-            self.clients[printer.id] = client
-            
-            # Connect async
-            self.connect_printer(printer.id)
-        
-        if printers:
-            self.printer_list.selectRow(0)
-    
-    def connect_printer(self, printer_id: str):
-        if printer_id not in self.clients:
+    def _add_printer_card(self, config: PrinterConfig):
+        key = f"{config.host}:{config.port}"
+        if key in self.printer_cards:
             return
         
-        client = self.clients[printer_id]
+        card = PrinterCard(config)
+        card.camera_clicked.connect(self._on_camera_clicked)
+        card.graph_clicked.connect(self._on_graph_clicked)
+        self.printer_cards[key] = card
         
-        async def connect():
-            return await client.connect()
-        
-        worker = AsyncWorker(connect())
-        worker.finished.connect(lambda success: self.on_printer_connected(printer_id, success))
-        worker.start()
-        
-        # Keep reference to prevent garbage collection
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
+        # Add to grid
+        count = len(self.printer_cards) - 1
+        cols = 3
+        row = count // cols
+        col = count % cols
+        self.cards_layout.addWidget(card, row, col)
     
-    def on_printer_connected(self, printer_id: str, success: bool):
-        printers = self.config_manager.get_all_printers()
-        for row, printer in enumerate(printers):
-            if printer.id == printer_id:
-                status = "Connected" if success else "Offline"
-                self.printer_list.setItem(row, 1, QTableWidgetItem(status))
-                break
+    def _remove_printer_card(self, host: str, port: int):
+        key = f"{host}:{port}"
+        if key in self.printer_cards:
+            card = self.printer_cards.pop(key)
+            self.cards_layout.removeWidget(card)
+            card.deleteLater()
+            self._reorganize_cards()
     
-    def on_printer_selected(self):
-        selected = self.printer_list.selectedItems()
-        if not selected:
-            return
+    def _reorganize_cards(self):
+        # Remove all cards from layout
+        for card in self.printer_cards.values():
+            self.cards_layout.removeWidget(card)
         
-        row = selected[0].row()
-        printers = self.config_manager.get_all_printers()
-        if row < len(printers):
-            self.current_printer_id = printers[row].id
-            self.refresh_status()
-            self.load_files()
-            self.load_history()
+        # Re-add in order
+        cols = 3
+        for i, card in enumerate(self.printer_cards.values()):
+            row = i // cols
+            col = i % cols
+            self.cards_layout.addWidget(card, row, col)
     
-    def refresh_status(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        
-        client = self.clients[self.current_printer_id]
-        
-        async def get_status():
-            return await client.get_printer_status()
-        
-        worker = AsyncWorker(get_status())
-        worker.finished.connect(self.update_status_display)
-        worker.start()
-        
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def update_status_display(self, status: PrinterStatus):
-        if not status.connected:
-            self.state_label.setText("Not Connected")
-            return
-        
-        self.state_label.setText(status.state.capitalize())
-        self.file_label.setText(status.filename or "-")
-        self.progress_bar.setValue(int(status.progress * 100))
-        
-        self.extruder_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.1f}°C")
-        self.bed_label.setText(f"{status.bed_temp:.1f}°C / {status.bed_target:.1f}°C")
-        
-        pos = status.position
-        self.position_label.setText(f"X: {pos[0]:.1f}  Y: {pos[1]:.1f}  Z: {pos[2]:.1f}")
-        self.speed_label.setText(f"Speed: {status.speed:.0f} mm/s")
-    
-    def show_scan_dialog(self):
-        dialog = NetworkScanDialog(self)
+    def _show_scan_dialog(self):
+        dialog = ScanDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             selected = dialog.get_selected_printers()
-            for discovered in selected:
-                printer = PrinterConfig(
-                    id=str(uuid.uuid4()),
-                    name=discovered.name,
-                    host=discovered.host,
-                    port=discovered.port
+            for p in selected:
+                config = PrinterConfig(
+                    name=p['name'],
+                    host=p['host'],
+                    port=p['port'],
+                    enabled=True
                 )
-                self.config_manager.add_printer(printer)
-            self.load_printers()
+                if self.config_manager.add_printer(config):
+                    self._add_printer_card(config)
+            self._refresh_all_status()
     
-    def add_printer(self):
+    def _show_add_dialog(self):
         dialog = AddPrinterDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            printer = dialog.get_printer_config()
-            if printer:
-                self.config_manager.add_printer(printer)
-                self.load_printers()
+            config = dialog.get_config()
+            if self.config_manager.add_printer(config):
+                self._add_printer_card(config)
+                self._refresh_all_status()
+            else:
+                QMessageBox.warning(self, "Error", "Printer already exists!")
     
-    def load_files(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
+    def _on_camera_clicked(self, webcam_url: str):
+        self.stats_panel.set_webcam_url(webcam_url)
+    
+    def _on_graph_clicked(self, card: PrinterCard):
+        self.selected_printer = card
+        self.stats_panel.clear()
+        # Update stats panel with this printer's data
+        self.stats_panel.update_stats(card.stats)
+        self.stats_panel.update_system_info(card.system_info)
+        if card.system_info.webcam_url:
+            self.stats_panel.set_webcam_url(card.system_info.webcam_url)
+    
+    def _refresh_all_status(self):
+        for key, card in self.printer_cards.items():
+            self._refresh_printer_status(card)
+    
+    def _refresh_printer_status(self, card: PrinterCard):
+        config = card.config
         
-        client = self.clients[self.current_printer_id]
+        async def fetch():
+            client = MoonrakerClient(
+                config.host, config.port,
+                config.api_key, config.username, config.password
+            )
+            try:
+                status = await client.get_status()
+                stats = await client.get_print_stats()
+                system_info = await client.get_system_info()
+                
+                # Also try to get better name if not set
+                if not config.name or config.name == config.host:
+                    name = await client.get_printer_name()
+                    if name and name != config.host:
+                        config.name = name
+                
+                return status, stats, system_info, config.name
+            finally:
+                await client.close()
         
-        async def get_files():
-            return await client.get_gcode_files()
-        
-        worker = AsyncWorker(get_files())
-        worker.finished.connect(self.update_files_display)
+        worker = AsyncWorker(fetch())
+        worker.finished.connect(lambda result: self._on_status_received(card, result))
         worker.start()
-        
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
+        self.update_workers.append(worker)
     
-    def update_files_display(self, files: list):
-        self.files_table.setRowCount(0)
-        for gcode_file in files:
-            row = self.files_table.rowCount()
-            self.files_table.insertRow(row)
-            self.files_table.setItem(row, 0, QTableWidgetItem(gcode_file.filename))
-            self.files_table.setItem(row, 1, QTableWidgetItem(f"{gcode_file.size / 1024:.1f} KB"))
-            modified = datetime.fromtimestamp(gcode_file.modified).strftime("%Y-%m-%d %H:%M")
-            self.files_table.setItem(row, 2, QTableWidgetItem(modified))
+    def _on_status_received(self, card: PrinterCard, result):
+        if result:
+            status, stats, system_info, name = result
+            card.update_status(status)
+            card.update_stats(stats)
+            card.update_system_info(system_info)
+            if name:
+                card.set_name(name)
+            
+            # Update stats panel if this is the selected printer
+            if self.selected_printer == card:
+                self.stats_panel.update_temps(
+                    status.extruder_temp,
+                    status.bed_temp,
+                    status.chamber_temp
+                )
+                self.stats_panel.update_stats(stats)
+                self.stats_panel.update_system_info(system_info)
+            
+            # If no printer selected, select the first one
+            if self.selected_printer is None and self.printer_cards:
+                first_card = list(self.printer_cards.values())[0]
+                self._on_graph_clicked(first_card)
+        
+        # Clean up finished workers
+        self.update_workers = [w for w in self.update_workers if w.isRunning()]
     
-    def load_history(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        
-        client = self.clients[self.current_printer_id]
-        
-        async def get_history():
-            return await client.get_print_history()
-        
-        worker = AsyncWorker(get_history())
-        worker.finished.connect(self.update_history_display)
-        worker.start()
-        
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def update_history_display(self, jobs: list):
-        self.history_table.setRowCount(0)
-        for job in jobs:
-            row = self.history_table.rowCount()
-            self.history_table.insertRow(row)
-            self.history_table.setItem(row, 0, QTableWidgetItem(job.filename))
-            self.history_table.setItem(row, 1, QTableWidgetItem(job.status))
-            duration = f"{job.print_duration / 60:.1f} min"
-            self.history_table.setItem(row, 2, QTableWidgetItem(duration))
-            filament = f"{job.filament_used / 1000:.2f} m"
-            self.history_table.setItem(row, 3, QTableWidgetItem(filament))
-            date = job.start_time.strftime("%Y-%m-%d %H:%M")
-            self.history_table.setItem(row, 4, QTableWidgetItem(date))
-    
-    def start_selected_print(self):
-        selected = self.files_table.selectedItems()
-        if not selected:
-            return
-        
-        row = selected[0].row()
-        filename = self.files_table.item(row, 0).text()
-        
-        reply = QMessageBox.question(
-            self, "Start Print",
-            f"Start printing {filename}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            self.start_print(filename)
-    
-    def start_print(self, filename: str):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        
-        client = self.clients[self.current_printer_id]
-        
-        async def start():
-            return await client.start_print(filename)
-        
-        worker = AsyncWorker(start())
-        worker.start()
-        
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def pause_print(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        client = self.clients[self.current_printer_id]
-        worker = AsyncWorker(client.pause_print())
-        worker.start()
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def resume_print(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        client = self.clients[self.current_printer_id]
-        worker = AsyncWorker(client.resume_print())
-        worker.start()
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def cancel_print(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        
-        reply = QMessageBox.question(
-            self, "Cancel Print",
-            "Are you sure you want to cancel the current print?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            client = self.clients[self.current_printer_id]
-            worker = AsyncWorker(client.cancel_print())
-            worker.start()
-            if not hasattr(self, '_workers'):
-                self._workers = []
-            self._workers.append(worker)
-    
-    def set_temperature(self, heater: str, target: float):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        client = self.clients[self.current_printer_id]
-        worker = AsyncWorker(client.set_temperature(heater, target))
-        worker.start()
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def send_gcode(self, gcode: str):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        client = self.clients[self.current_printer_id]
-        worker = AsyncWorker(client.send_gcode(gcode))
-        worker.start()
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
-    
-    def emergency_stop(self):
-        if not self.current_printer_id or self.current_printer_id not in self.clients:
-            return
-        client = self.clients[self.current_printer_id]
-        worker = AsyncWorker(client.emergency_stop())
-        worker.start()
-        if not hasattr(self, '_workers'):
-            self._workers = []
-        self._workers.append(worker)
+    def closeEvent(self, event):
+        self.refresh_timer.stop()
+        # Clean up workers
+        for worker in self.update_workers:
+            worker.quit()
+            worker.wait()
+        event.accept()
 
 
-# ============================================================================
+# =============================================================================
 # Main Entry Point
-# ============================================================================
+# =============================================================================
 
 def main():
-    """Main entry point"""
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
-    
     app = QApplication(sys.argv)
-    app.setApplicationName("KlipperBuddy")
-    app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("KlipperBuddy")
-    app.setStyle("Fusion")
+    app.setStyle('Fusion')
+    
+    # Load Play font
+    font_path = resource_path("Play-Regular.ttf")
+    if os.path.exists(font_path):
+        QFontDatabase.addApplicationFont(font_path)
+    
+    font_bold_path = resource_path("Play-Bold.ttf")
+    if os.path.exists(font_bold_path):
+        QFontDatabase.addApplicationFont(font_bold_path)
+    
+    # Set default font
+    app.setFont(QFont("Play", 10))
+    
+    app.setStyleSheet(STYLESHEET)
+    
+    # Set dark palette
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(COLORS['bg_dark']))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(COLORS['text_primary']))
+    palette.setColor(QPalette.ColorRole.Base, QColor(COLORS['bg_card']))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(COLORS['bg_dark']))
+    palette.setColor(QPalette.ColorRole.Text, QColor(COLORS['text_primary']))
+    palette.setColor(QPalette.ColorRole.Button, QColor(COLORS['bg_card']))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(COLORS['accent']))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(COLORS['accent']))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(COLORS['bg_dark']))
+    app.setPalette(palette)
     
     window = MainWindow()
     window.show()

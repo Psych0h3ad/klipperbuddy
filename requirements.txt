@@ -1,3 +1,11 @@
 # KlipperBuddy Dependencies
+
+# GUI Framework
 PyQt6>=6.4.0
+PyQt6-Charts>=6.4.0
+
+# Async HTTP Client
 aiohttp>=3.8.0
+
+# Build Tools (development only)
+pyinstaller>=5.0.0
