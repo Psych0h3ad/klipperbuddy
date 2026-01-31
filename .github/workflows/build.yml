@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build Windows Release
 
 on:
   push:
@@ -9,115 +9,78 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    
     steps:
-      - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          
-      - name: Build executable
-        run: |
-          pyinstaller --onefile --windowed --name KlipperBuddy src/main.py
-          
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KlipperBuddy-Windows
-          path: dist/KlipperBuddy.exe
-          
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxcb-cursor0 libxkbcommon0
-          
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          
-      - name: Build executable
-        run: |
-          pyinstaller --onefile --windowed --name KlipperBuddy-Linux src/main.py
-          
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KlipperBuddy-Linux
-          path: dist/KlipperBuddy-Linux
-          
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          
-      - name: Build executable
-        run: |
-          pyinstaller --onefile --windowed --name KlipperBuddy-macOS src/main.py
-          
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KlipperBuddy-macOS
-          path: dist/KlipperBuddy-macOS
-          
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller PyQt6 aiohttp
+        
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --windowed --name KlipperBuddy --hidden-import=asyncio --hidden-import=aiohttp klipperbuddy.py
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: KlipperBuddy-Windows
+        path: dist/KlipperBuddy.exe
+        
   release:
-    needs: [build-windows, build-linux, build-macos]
+    needs: build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    
     steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: KlipperBuddy-Windows
-          path: windows
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: KlipperBuddy-Windows
+        path: ./windows
+        
+    - name: Get version
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        else
+          echo "version=v1.0.0-$(date +%Y%m%d%H%M%S )" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: KlipperBuddy ${{ steps.version.outputs.version }}
+        body: |
+          ## KlipperBuddy ${{ steps.version.outputs.version }}
           
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: KlipperBuddy-Linux
-          path: linux
+          Desktop application for Klipper printer management.
           
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: KlipperBuddy-macOS
-          path: macos
+          ### Features
+          - Network auto-discovery for Klipper printers
+          - Fluidd/Mainsail authentication support
+          - Real-time printer monitoring
+          - Print history management
+          - File management
+          - System tray support
           
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v1.0.0-${{ github.run_number }}
-          name: KlipperBuddy Build ${{ github.run_number }}
-          files: |
-            windows/KlipperBuddy.exe
-            linux/KlipperBuddy-Linux
-            macos/KlipperBuddy-macOS
-          generate_release_notes: true
+          ### Download
+          - **Windows**: KlipperBuddy.exe
+          
+          ### Requirements
+          - Windows 10 or later
+          - Klipper printer with Moonraker API
+        files: |
+          ./windows/KlipperBuddy.exe
+        draft: false
+        prerelease: false
