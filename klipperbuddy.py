@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QRect, QPoint, QMargins
 from PyQt6.QtGui import (
     QFont, QColor, QPalette, QLinearGradient, QPainter, QBrush, QPen,
-    QFontDatabase, QPixmap, QPainterPath, QPaintEvent
+    QFontDatabase, QPixmap, QPainterPath, QPaintEvent, QIcon
 )
 
 import aiohttp
@@ -617,6 +617,36 @@ class MoonrakerClient:
                     return resp.status == 401
         except:
             return False
+    
+    async def send_gcode(self, gcode: str) -> bool:
+        """Send G-code command to printer"""
+        try:
+            resp = await self._request('POST', '/printer/gcode/script', json={'script': gcode})
+            return resp is not None
+        except:
+            return False
+    
+    async def get_input_shaper_data(self) -> Optional[Dict]:
+        """Get Input Shaper configuration and recommendations"""
+        try:
+            resp = await self._request('GET', '/printer/objects/query?input_shaper&configfile')
+            if resp and 'result' in resp:
+                data = resp['result'].get('status', {})
+                shaper = data.get('input_shaper', {})
+                config = data.get('configfile', {}).get('settings', {})
+                
+                return {
+                    'shaper_type_x': shaper.get('shaper_type_x', ''),
+                    'shaper_freq_x': shaper.get('shaper_freq_x', 0),
+                    'shaper_type_y': shaper.get('shaper_type_y', ''),
+                    'shaper_freq_y': shaper.get('shaper_freq_y', 0),
+                    'damping_ratio_x': shaper.get('damping_ratio_x', 0.1),
+                    'damping_ratio_y': shaper.get('damping_ratio_y', 0.1),
+                    'config': config.get('input_shaper', {})
+                }
+        except:
+            pass
+        return None
 
 
 # =============================================================================
@@ -994,7 +1024,7 @@ class PrinterCard(QFrame):
         self.camera_btn = QPushButton()
         camera_icon_path = resource_path("icons/icon_camera.png")
         if os.path.exists(camera_icon_path):
-            self.camera_btn.setIcon(QPixmap(camera_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            self.camera_btn.setIcon(QIcon(camera_icon_path))
         else:
             self.camera_btn.setText("📷")
         self.camera_btn.setFixedSize(40, 32)
@@ -1005,7 +1035,7 @@ class PrinterCard(QFrame):
         self.graph_btn = QPushButton()
         graph_icon_path = resource_path("icons/icon_graph.png")
         if os.path.exists(graph_icon_path):
-            self.graph_btn.setIcon(QPixmap(graph_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            self.graph_btn.setIcon(QIcon(graph_icon_path))
         else:
             self.graph_btn.setText("📈")
         self.graph_btn.setFixedSize(40, 32)
@@ -1334,6 +1364,104 @@ class StatsPanel(QFrame):
         self.disk_bar.setTextVisible(False)
         layout.addWidget(self.disk_bar)
         
+        # Separator
+        line4 = QFrame()
+        line4.setFrameShape(QFrame.Shape.HLine)
+        line4.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line4)
+        
+        # Tuning Advisor section
+        tuning_label = QLabel("🔧 TUNING ADVISOR")
+        tuning_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        tuning_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(tuning_label)
+        
+        # PID Warning
+        self.pid_warning_frame = QFrame()
+        self.pid_warning_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['warning']};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+        """)
+        self.pid_warning_frame.setVisible(False)
+        pid_warning_layout = QVBoxLayout(self.pid_warning_frame)
+        pid_warning_layout.setContentsMargins(8, 8, 8, 8)
+        pid_warning_layout.setSpacing(4)
+        
+        self.pid_warning_label = QLabel("⚠️ Temperature fluctuation detected")
+        self.pid_warning_label.setFont(QFont("Play", 9))
+        self.pid_warning_label.setStyleSheet(f"color: {COLORS['warning']};")
+        self.pid_warning_label.setWordWrap(True)
+        pid_warning_layout.addWidget(self.pid_warning_label)
+        
+        pid_btn_layout = QHBoxLayout()
+        self.pid_hotend_btn = QPushButton("PID Tune Hotend")
+        self.pid_hotend_btn.setFixedHeight(28)
+        self.pid_hotend_btn.clicked.connect(lambda: self._run_pid_calibrate('extruder'))
+        pid_btn_layout.addWidget(self.pid_hotend_btn)
+        
+        self.pid_bed_btn = QPushButton("PID Tune Bed")
+        self.pid_bed_btn.setFixedHeight(28)
+        self.pid_bed_btn.clicked.connect(lambda: self._run_pid_calibrate('heater_bed'))
+        pid_btn_layout.addWidget(self.pid_bed_btn)
+        pid_warning_layout.addLayout(pid_btn_layout)
+        
+        layout.addWidget(self.pid_warning_frame)
+        
+        # Input Shaper section
+        self.shaper_frame = QFrame()
+        self.shaper_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+        """)
+        shaper_layout = QVBoxLayout(self.shaper_frame)
+        shaper_layout.setContentsMargins(8, 8, 8, 8)
+        shaper_layout.setSpacing(4)
+        
+        shaper_title = QLabel("Input Shaper")
+        shaper_title.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        shaper_title.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        shaper_layout.addWidget(shaper_title)
+        
+        shaper_grid = QGridLayout()
+        shaper_grid.setSpacing(4)
+        
+        shaper_grid.addWidget(QLabel("X Axis:"), 0, 0)
+        self.shaper_x_label = QLabel("--")
+        self.shaper_x_label.setFont(QFont("Play", 9))
+        self.shaper_x_label.setStyleSheet(f"color: {COLORS['accent']};")
+        shaper_grid.addWidget(self.shaper_x_label, 0, 1)
+        
+        shaper_grid.addWidget(QLabel("Y Axis:"), 1, 0)
+        self.shaper_y_label = QLabel("--")
+        self.shaper_y_label.setFont(QFont("Play", 9))
+        self.shaper_y_label.setStyleSheet(f"color: {COLORS['accent']};")
+        shaper_grid.addWidget(self.shaper_y_label, 1, 1)
+        
+        shaper_layout.addLayout(shaper_grid)
+        
+        self.shaper_calibrate_btn = QPushButton("Run SHAPER_CALIBRATE")
+        self.shaper_calibrate_btn.setFixedHeight(28)
+        self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
+        self.shaper_calibrate_btn.setEnabled(False)
+        shaper_layout.addWidget(self.shaper_calibrate_btn)
+        
+        layout.addWidget(self.shaper_frame)
+        
+        # Store temperature history for PID warning
+        self._temp_history_hotend: deque = deque(maxlen=30)
+        self._temp_history_bed: deque = deque(maxlen=30)
+        self._current_printer_config = None
+        
+        # Signal for G-code commands
+        self.gcode_requested = None  # Will be set by MainWindow
+        
         layout.addStretch()
     
     def _apply_style(self):
@@ -1438,6 +1566,108 @@ class StatsPanel(QFrame):
             percent = (info.disk_used / info.disk_total) * 100
             self.disk_bar.setValue(int(percent))
     
+    def _run_pid_calibrate(self, heater: str):
+        """Run PID calibration for specified heater"""
+        if not self._current_printer_config:
+            return
+        
+        # Determine target temperature
+        if heater == 'extruder':
+            target = 200  # Default hotend temp
+            gcode = f"PID_CALIBRATE HEATER=extruder TARGET={target}"
+        else:
+            target = 60  # Default bed temp
+            gcode = f"PID_CALIBRATE HEATER=heater_bed TARGET={target}"
+        
+        # Confirm with user
+        reply = QMessageBox.question(
+            self, "PID Calibration",
+            f"Run PID calibration for {heater} at {target}°C?\n\n"
+            "This will take several minutes. The printer should be at room temperature.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.gcode_requested:
+                self.gcode_requested(self._current_printer_config, gcode)
+    
+    def _run_shaper_calibrate(self):
+        """Run Input Shaper calibration"""
+        if not self._current_printer_config:
+            return
+        
+        reply = QMessageBox.question(
+            self, "Input Shaper Calibration",
+            "Run SHAPER_CALIBRATE?\n\n"
+            "This will measure resonance frequencies on both axes.\n"
+            "Make sure an accelerometer is connected and configured.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.gcode_requested:
+                self.gcode_requested(self._current_printer_config, "SHAPER_CALIBRATE")
+    
+    def _check_pid_warning(self, hotend: float, bed: float, hotend_target: float, bed_target: float):
+        """Check for temperature fluctuations that suggest PID tuning is needed"""
+        self._temp_history_hotend.append(hotend)
+        self._temp_history_bed.append(bed)
+        
+        show_warning = False
+        warning_text = ""
+        
+        # Check hotend fluctuation when heating
+        if hotend_target > 50 and len(self._temp_history_hotend) >= 10:
+            temps = list(self._temp_history_hotend)[-10:]
+            fluctuation = max(temps) - min(temps)
+            if fluctuation > 5:  # More than 5°C fluctuation
+                show_warning = True
+                warning_text = f"⚠️ Hotend temp fluctuation: ±{fluctuation/2:.1f}°C\nPID tuning recommended."
+        
+        # Check bed fluctuation when heating
+        if bed_target > 30 and len(self._temp_history_bed) >= 10:
+            temps = list(self._temp_history_bed)[-10:]
+            fluctuation = max(temps) - min(temps)
+            if fluctuation > 3:  # More than 3°C fluctuation
+                show_warning = True
+                if warning_text:
+                    warning_text += f"\n⚠️ Bed temp fluctuation: ±{fluctuation/2:.1f}°C"
+                else:
+                    warning_text = f"⚠️ Bed temp fluctuation: ±{fluctuation/2:.1f}°C\nPID tuning recommended."
+        
+        self.pid_warning_frame.setVisible(show_warning)
+        if show_warning:
+            self.pid_warning_label.setText(warning_text)
+    
+    def update_input_shaper(self, shaper_data: Optional[Dict]):
+        """Update Input Shaper display"""
+        if shaper_data:
+            x_type = shaper_data.get('shaper_type_x', '--')
+            x_freq = shaper_data.get('shaper_freq_x', 0)
+            y_type = shaper_data.get('shaper_type_y', '--')
+            y_freq = shaper_data.get('shaper_freq_y', 0)
+            
+            if x_type and x_freq > 0:
+                self.shaper_x_label.setText(f"{x_type.upper()} @ {x_freq:.1f} Hz")
+            else:
+                self.shaper_x_label.setText("Not configured")
+            
+            if y_type and y_freq > 0:
+                self.shaper_y_label.setText(f"{y_type.upper()} @ {y_freq:.1f} Hz")
+            else:
+                self.shaper_y_label.setText("Not configured")
+            
+            self.shaper_calibrate_btn.setEnabled(True)
+        else:
+            self.shaper_x_label.setText("--")
+            self.shaper_y_label.setText("--")
+            self.shaper_calibrate_btn.setEnabled(False)
+    
+    def set_printer_config(self, config):
+        """Set current printer config for G-code commands"""
+        self._current_printer_config = config
+        self.shaper_calibrate_btn.setEnabled(config is not None)
+    
     def clear(self):
         self.temp_chart.clear_data()
         self.hotend_label.setText("Hotend: --°C")
@@ -1458,6 +1688,13 @@ class StatsPanel(QFrame):
         self.current_webcam_url = ""
         self.camera_timer.stop()
         self.printer_name_label.setText("Select a printer")
+        self.pid_warning_frame.setVisible(False)
+        self.shaper_x_label.setText("--")
+        self.shaper_y_label.setText("--")
+        self.shaper_calibrate_btn.setEnabled(False)
+        self._temp_history_hotend.clear()
+        self._temp_history_bed.clear()
+        self._current_printer_config = None
 
 
 # =============================================================================
@@ -1687,6 +1924,9 @@ class MainWindow(QMainWindow):
         
         self._setup_ui()
         self._load_printers()
+        
+        # Connect G-code request handler
+        self.stats_panel.gcode_requested = self._send_gcode
         
         # Auto-refresh timer
         self.refresh_timer = QTimer()
@@ -1958,6 +2198,7 @@ class MainWindow(QMainWindow):
                 status = await client.get_status()
                 stats = await client.get_print_stats()
                 system_info = await client.get_system_info()
+                shaper_data = await client.get_input_shaper_data()
                 
                 # Also try to get better name if not set
                 if not config.name or config.name == config.host:
@@ -1965,7 +2206,7 @@ class MainWindow(QMainWindow):
                     if name and name != config.host:
                         config.name = name
                 
-                return status, stats, system_info, config.name
+                return status, stats, system_info, shaper_data, config.name
             finally:
                 await client.close()
         
@@ -1976,7 +2217,7 @@ class MainWindow(QMainWindow):
     
     def _on_status_received(self, card: PrinterCard, result):
         if result:
-            status, stats, system_info, name = result
+            status, stats, system_info, shaper_data, name = result
             card.update_status(status)
             card.update_stats(stats)
             card.update_system_info(system_info)
@@ -1992,6 +2233,16 @@ class MainWindow(QMainWindow):
                 )
                 self.stats_panel.update_stats(stats)
                 self.stats_panel.update_system_info(system_info)
+                self.stats_panel.update_input_shaper(shaper_data)
+                self.stats_panel.set_printer_config(card.config)
+                
+                # Check for PID warning
+                self.stats_panel._check_pid_warning(
+                    status.extruder_temp,
+                    status.bed_temp,
+                    status.extruder_target,
+                    status.bed_target
+                )
             
             # If no printer selected, select the first one
             if self.selected_printer is None and self.printer_cards:
@@ -2000,6 +2251,32 @@ class MainWindow(QMainWindow):
         
         # Clean up finished workers
         self.update_workers = [w for w in self.update_workers if w.isRunning()]
+    
+    def _send_gcode(self, config: PrinterConfig, gcode: str):
+        """Send G-code command to a printer"""
+        async def send():
+            client = MoonrakerClient(
+                config.host, config.port,
+                config.api_key, config.username, config.password
+            )
+            try:
+                success = await client.send_gcode(gcode)
+                return success
+            finally:
+                await client.close()
+        
+        def on_result(success):
+            if success:
+                self.status_label.setText(f"Command sent: {gcode[:30]}...")
+                QMessageBox.information(self, "Success", f"Command sent successfully:\n{gcode}")
+            else:
+                self.status_label.setText("Failed to send command")
+                QMessageBox.warning(self, "Error", f"Failed to send command:\n{gcode}")
+        
+        worker = AsyncWorker(send())
+        worker.finished.connect(on_result)
+        worker.start()
+        self.update_workers.append(worker)
     
     def closeEvent(self, event):
         self.refresh_timer.stop()
