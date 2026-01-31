@@ -584,7 +584,7 @@ class NetworkScanner:
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"http://{host}:{port}/printer/info"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=1)) as resp:
                     if resp.status in [200, 401]:
                         auth_required = resp.status == 401
                         if resp.status == 200:
@@ -601,6 +601,37 @@ class NetworkScanner:
         except:
             pass
         return None
+    
+    @staticmethod
+    async def scan_network_parallel(progress_callback=None) -> List[Dict]:
+        """Scan network in parallel for much faster discovery"""
+        hosts = NetworkScanner.get_network_range()
+        results = []
+        total = len(hosts)
+        completed = 0
+        
+        # Create semaphore to limit concurrent connections
+        semaphore = asyncio.Semaphore(50)
+        
+        async def check_with_semaphore(host: str) -> Optional[Dict]:
+            nonlocal completed
+            async with semaphore:
+                result = await NetworkScanner.check_moonraker(host)
+                completed += 1
+                if progress_callback:
+                    progress_callback(int(completed / total * 100))
+                return result
+        
+        # Run all checks in parallel
+        tasks = [check_with_semaphore(host) for host in hosts]
+        check_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter successful results
+        for result in check_results:
+            if result and isinstance(result, dict):
+                results.append(result)
+        
+        return results
 
 
 # =============================================================================
@@ -710,24 +741,28 @@ class TemperatureChart(QWidget):
         draw_line(self.bed_data, COLORS['temp_bed'])
         draw_line(self.chamber_data, COLORS['temp_chamber'])
         
-        # Legend
-        legend_y = self.height() - 15
-        painter.setFont(QFont("Play", 9))
+        # Legend - positioned below the chart with proper spacing
+        legend_y = self.height() - 12
+        painter.setFont(QFont("Play", 8))
+        
+        # Calculate positions to spread evenly
+        legend_start = margin
+        spacing = 80
         
         painter.setPen(QPen(QColor(COLORS['temp_hotend']), 2))
-        painter.drawLine(margin, legend_y, margin + 20, legend_y)
+        painter.drawLine(legend_start, legend_y, legend_start + 15, legend_y)
         painter.setPen(QColor(COLORS['text_secondary']))
-        painter.drawText(margin + 25, legend_y + 4, "Hotend")
+        painter.drawText(legend_start + 18, legend_y + 4, "Hotend")
         
         painter.setPen(QPen(QColor(COLORS['temp_bed']), 2))
-        painter.drawLine(margin + 90, legend_y, margin + 110, legend_y)
+        painter.drawLine(legend_start + spacing, legend_y, legend_start + spacing + 15, legend_y)
         painter.setPen(QColor(COLORS['text_secondary']))
-        painter.drawText(margin + 115, legend_y + 4, "Bed")
+        painter.drawText(legend_start + spacing + 18, legend_y + 4, "Bed")
         
         painter.setPen(QPen(QColor(COLORS['temp_chamber']), 2))
-        painter.drawLine(margin + 160, legend_y, margin + 180, legend_y)
+        painter.drawLine(legend_start + spacing * 2, legend_y, legend_start + spacing * 2 + 15, legend_y)
         painter.setPen(QColor(COLORS['text_secondary']))
-        painter.drawText(margin + 185, legend_y + 4, "Chamber")
+        painter.drawText(legend_start + spacing * 2 + 18, legend_y + 4, "Chamber")
 
 
 # =============================================================================
@@ -1335,28 +1370,26 @@ class ScanDialog(QDialog):
         self.table.setRowCount(0)
         self.discovered = []
         self.progress.setValue(0)
-        self.status_label.setText("Scanning network...")
+        self.status_label.setText("Scanning network (parallel)...")
+        
+        def update_progress(value):
+            self.progress.setValue(value)
         
         async def scan():
-            hosts = NetworkScanner.get_network_range()
-            results = []
-            total = len(hosts)
+            # Fast parallel scan
+            results = await NetworkScanner.scan_network_parallel(update_progress)
             
-            for i, host in enumerate(hosts):
+            # Get printer names for found printers
+            for result in results:
                 if not self._scanning:
                     break
-                
-                result = await NetworkScanner.check_moonraker(host)
-                if result:
-                    # Get printer name
-                    client = MoonrakerClient(host, result['port'])
+                try:
+                    client = MoonrakerClient(result['host'], result['port'])
                     name = await client.get_printer_name()
                     await client.close()
                     result['name'] = name
-                    results.append(result)
-                
-                progress = int((i + 1) / total * 100)
-                self.progress.setValue(progress)
+                except:
+                    result['name'] = result['host']
             
             return results
         
