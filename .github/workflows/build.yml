@@ -22,16 +22,19 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller PyQt6 aiohttp
+        pip install pyinstaller PyQt6 aiohttp cryptography
         
     - name: Build executable
       run: |
         pyinstaller --onefile --windowed --name KlipperBuddy `
           --add-data "title_logo.png;." `
+          --add-data "p3d_logo.png;." `
           --add-data "Play-Regular.ttf;." `
           --add-data "Play-Bold.ttf;." `
+          --add-data "icons;icons" `
           --hidden-import=asyncio `
           --hidden-import=aiohttp `
+          --hidden-import=cryptography `
           klipperbuddy.py
         
     - name: Upload artifact
@@ -59,7 +62,7 @@ jobs:
         if [[ "${{ github.ref }}" == refs/tags/* ]]; then
           echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         else
-          echo "version=v3.0.0-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+          echo "version=v4.0.0-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
         fi
         
     - name: Create Release
@@ -73,14 +76,14 @@ jobs:
           Cyberpunk-style desktop dashboard for Klipper printers.
           
           ### Features
-          - 🔍 Network auto-discovery for Klipper printers
-          - 🔐 Fluidd/Mainsail authentication support
+          - 🔍 **Auto network scan on startup** - Automatically finds printers
+          - 🔐 **Encrypted credential storage** - API keys and passwords are encrypted
           - 📊 Real-time multi-printer dashboard
-          - 🌡️ Temperature monitoring (Extruder, Bed, Chamber)
-          - 📈 **Temperature graph** with real-time plotting
-          - 📷 **Camera preview** with browser integration
-          - 📊 **Print statistics** (total time, filament, success rate)
-          - 💻 **System info** (Klipper/Moonraker versions, disk usage)
+          - 🌡️ Temperature monitoring with custom icons
+          - 📈 Temperature graph with real-time plotting
+          - 📷 Camera preview with browser integration
+          - 📊 Print statistics (total time, filament, success rate)
+          - 💻 System info (Klipper/Moonraker versions, disk usage)
           - ⚡ Cyberpunk UI with Tiffany Blue accents
           - 🔤 Play font (VORON style) for UI
           
