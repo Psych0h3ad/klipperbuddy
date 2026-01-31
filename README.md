@@ -99,7 +99,9 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 This project is inspired by Bambuddy but is an independent implementation for Klipper printers.
 
-### Font Licenses
+### Asset Licenses
 
+- **KlipperBuddy Source Code**: MIT License
+- **P3D Logo**: © Yuto - All rights reserved
 - **Play Font**: SIL Open Font License 1.1 - Embedded in application
-- **ToaHI Font**: Used only for title logo image (not embedded)
+- **ToaHI Font (title logo)**: Used under Iwata license for title/logo creation only (not embedded)
