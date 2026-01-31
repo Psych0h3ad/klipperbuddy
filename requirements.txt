@@ -2,7 +2,6 @@
 
 # GUI Framework
 PyQt6>=6.4.0
-PyQt6-Charts>=6.4.0
 
 # Async HTTP Client
 aiohttp>=3.8.0

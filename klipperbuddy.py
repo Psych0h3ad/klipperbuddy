@@ -26,12 +26,11 @@ from PyQt6.QtWidgets import (
     QMessageBox, QFrame, QScrollArea, QSpinBox, QFormLayout, QGraphicsDropShadowEffect,
     QSplitter, QGroupBox, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QPointF
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QRect, QPoint, QMargins
 from PyQt6.QtGui import (
     QFont, QColor, QPalette, QLinearGradient, QPainter, QBrush, QPen,
-    QFontDatabase, QPixmap, QPainterPath
+    QFontDatabase, QPixmap, QPainterPath, QPaintEvent
 )
-from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 
 import aiohttp
 
@@ -489,9 +488,6 @@ class MoonrakerClient:
             resp = await self._request('GET', '/server/info')
             if resp and 'result' in resp:
                 info.moonraker_version = resp['result'].get('moonraker_version', '')
-                
-                # Get webcam info
-                webcams = resp['result'].get('webcam', {})
         except:
             pass
         
@@ -629,109 +625,109 @@ class AsyncWorker(QThread):
 
 
 # =============================================================================
-# Temperature Chart Widget
+# Temperature Chart Widget (Custom QPainter implementation - no QtCharts needed)
 # =============================================================================
 
-class TemperatureChart(QChartView):
-    """Real-time temperature chart with cyberpunk styling"""
+class TemperatureChart(QWidget):
+    """Real-time temperature chart with cyberpunk styling using QPainter"""
     
     MAX_POINTS = 60  # 60 data points (3 seconds * 60 = 3 minutes of data)
     
     def __init__(self, parent=None):
-        self.chart = QChart()
-        super().__init__(self.chart, parent)
+        super().__init__(parent)
+        self.setMinimumHeight(180)
         
-        self.hotend_series = QLineSeries()
-        self.hotend_series.setName("Hotend")
-        self.hotend_series.setColor(QColor(COLORS['temp_hotend']))
+        self.hotend_data: deque = deque(maxlen=self.MAX_POINTS)
+        self.bed_data: deque = deque(maxlen=self.MAX_POINTS)
+        self.chamber_data: deque = deque(maxlen=self.MAX_POINTS)
         
-        self.bed_series = QLineSeries()
-        self.bed_series.setName("Bed")
-        self.bed_series.setColor(QColor(COLORS['temp_bed']))
-        
-        self.chamber_series = QLineSeries()
-        self.chamber_series.setName("Chamber")
-        self.chamber_series.setColor(QColor(COLORS['temp_chamber']))
-        
-        self.chart.addSeries(self.hotend_series)
-        self.chart.addSeries(self.bed_series)
-        self.chart.addSeries(self.chamber_series)
-        
-        # X axis (time)
-        self.axis_x = QValueAxis()
-        self.axis_x.setRange(0, self.MAX_POINTS)
-        self.axis_x.setLabelFormat("%d")
-        self.axis_x.setTitleText("Time")
-        self.axis_x.setLabelsColor(QColor(COLORS['text_secondary']))
-        self.axis_x.setTitleBrush(QBrush(QColor(COLORS['text_secondary'])))
-        self.axis_x.setGridLineColor(QColor(COLORS['border']))
-        
-        # Y axis (temperature)
-        self.axis_y = QValueAxis()
-        self.axis_y.setRange(0, 300)
-        self.axis_y.setLabelFormat("%d°C")
-        self.axis_y.setTitleText("Temperature")
-        self.axis_y.setLabelsColor(QColor(COLORS['text_secondary']))
-        self.axis_y.setTitleBrush(QBrush(QColor(COLORS['text_secondary'])))
-        self.axis_y.setGridLineColor(QColor(COLORS['border']))
-        
-        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
-        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
-        
-        self.hotend_series.attachAxis(self.axis_x)
-        self.hotend_series.attachAxis(self.axis_y)
-        self.bed_series.attachAxis(self.axis_x)
-        self.bed_series.attachAxis(self.axis_y)
-        self.chamber_series.attachAxis(self.axis_x)
-        self.chamber_series.attachAxis(self.axis_y)
-        
-        # Styling
-        self.chart.setBackgroundBrush(QBrush(QColor(COLORS['bg_card'])))
-        self.chart.setTitleBrush(QBrush(QColor(COLORS['accent'])))
-        self.chart.legend().setLabelColor(QColor(COLORS['text_primary']))
-        self.chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
-        self.chart.setMargins(QMargins(5, 5, 5, 5))
-        
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setMinimumHeight(200)
-        
-        self.data_index = 0
-        self.hotend_data: Deque[float] = deque(maxlen=self.MAX_POINTS)
-        self.bed_data: Deque[float] = deque(maxlen=self.MAX_POINTS)
-        self.chamber_data: Deque[float] = deque(maxlen=self.MAX_POINTS)
+        self.max_temp = 300
     
     def add_data(self, hotend: float, bed: float, chamber: float):
         self.hotend_data.append(hotend)
         self.bed_data.append(bed)
         self.chamber_data.append(chamber)
         
-        # Update series
-        self.hotend_series.clear()
-        self.bed_series.clear()
-        self.chamber_series.clear()
+        # Auto-scale
+        all_temps = list(self.hotend_data) + list(self.bed_data) + list(self.chamber_data)
+        if all_temps:
+            self.max_temp = max(300, max(all_temps) + 20)
         
-        for i, (h, b, c) in enumerate(zip(self.hotend_data, self.bed_data, self.chamber_data)):
-            self.hotend_series.append(i, h)
-            self.bed_series.append(i, b)
-            self.chamber_series.append(i, c)
-        
-        # Auto-scale Y axis
-        max_temp = max(max(self.hotend_data, default=0), 
-                      max(self.bed_data, default=0),
-                      max(self.chamber_data, default=0))
-        self.axis_y.setRange(0, max(300, max_temp + 20))
+        self.update()
     
     def clear_data(self):
         self.hotend_data.clear()
         self.bed_data.clear()
         self.chamber_data.clear()
-        self.hotend_series.clear()
-        self.bed_series.clear()
-        self.chamber_series.clear()
-
-
-# Need to import QMargins
-from PyQt6.QtCore import QMargins
+        self.update()
+    
+    def paintEvent(self, event: QPaintEvent):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Background
+        painter.fillRect(self.rect(), QColor(COLORS['bg_card']))
+        
+        # Chart area
+        margin = 40
+        chart_rect = QRect(margin, 10, self.width() - margin - 10, self.height() - 30)
+        
+        # Draw grid
+        painter.setPen(QPen(QColor(COLORS['border']), 1))
+        for i in range(5):
+            y = chart_rect.top() + (chart_rect.height() * i // 4)
+            painter.drawLine(chart_rect.left(), y, chart_rect.right(), y)
+        
+        # Draw Y axis labels
+        painter.setPen(QPen(QColor(COLORS['text_secondary']), 1))
+        painter.setFont(QFont("Play", 8))
+        for i in range(5):
+            y = chart_rect.top() + (chart_rect.height() * i // 4)
+            temp = int(self.max_temp * (4 - i) / 4)
+            painter.drawText(5, y + 4, f"{temp}°C")
+        
+        # Draw data lines
+        def draw_line(data: deque, color: str):
+            if len(data) < 2:
+                return
+            
+            pen = QPen(QColor(color), 2)
+            painter.setPen(pen)
+            
+            path = QPainterPath()
+            for i, temp in enumerate(data):
+                x = chart_rect.left() + (chart_rect.width() * i // (self.MAX_POINTS - 1))
+                y = chart_rect.bottom() - (chart_rect.height() * temp / self.max_temp)
+                
+                if i == 0:
+                    path.moveTo(x, y)
+                else:
+                    path.lineTo(x, y)
+            
+            painter.drawPath(path)
+        
+        draw_line(self.hotend_data, COLORS['temp_hotend'])
+        draw_line(self.bed_data, COLORS['temp_bed'])
+        draw_line(self.chamber_data, COLORS['temp_chamber'])
+        
+        # Legend
+        legend_y = self.height() - 15
+        painter.setFont(QFont("Play", 9))
+        
+        painter.setPen(QPen(QColor(COLORS['temp_hotend']), 2))
+        painter.drawLine(margin, legend_y, margin + 20, legend_y)
+        painter.setPen(QColor(COLORS['text_secondary']))
+        painter.drawText(margin + 25, legend_y + 4, "Hotend")
+        
+        painter.setPen(QPen(QColor(COLORS['temp_bed']), 2))
+        painter.drawLine(margin + 90, legend_y, margin + 110, legend_y)
+        painter.setPen(QColor(COLORS['text_secondary']))
+        painter.drawText(margin + 115, legend_y + 4, "Bed")
+        
+        painter.setPen(QPen(QColor(COLORS['temp_chamber']), 2))
+        painter.drawLine(margin + 160, legend_y, margin + 180, legend_y)
+        painter.setPen(QColor(COLORS['text_secondary']))
+        painter.drawText(margin + 185, legend_y + 4, "Chamber")
 
 
 # =============================================================================
