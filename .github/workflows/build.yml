@@ -26,7 +26,13 @@ jobs:
         
     - name: Build executable
       run: |
-        pyinstaller --onefile --windowed --name KlipperBuddy --hidden-import=asyncio --hidden-import=aiohttp klipperbuddy.py
+        pyinstaller --onefile --windowed --name KlipperBuddy `
+          --add-data "title_logo.png;." `
+          --add-data "Play-Regular.ttf;." `
+          --add-data "Play-Bold.ttf;." `
+          --hidden-import=asyncio `
+          --hidden-import=aiohttp `
+          klipperbuddy.py
         
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -53,7 +59,7 @@ jobs:
         if [[ "${{ github.ref }}" == refs/tags/* ]]; then
           echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         else
-          echo "version=v1.0.0-$(date +%Y%m%d%H%M%S )" >> $GITHUB_OUTPUT
+          echo "version=v3.0.0-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
         fi
         
     - name: Create Release
@@ -64,15 +70,19 @@ jobs:
         body: |
           ## KlipperBuddy ${{ steps.version.outputs.version }}
           
-          Desktop application for Klipper printer management.
+          Cyberpunk-style desktop dashboard for Klipper printers.
           
           ### Features
-          - Network auto-discovery for Klipper printers
-          - Fluidd/Mainsail authentication support
-          - Real-time printer monitoring
-          - Print history management
-          - File management
-          - System tray support
+          - 🔍 Network auto-discovery for Klipper printers
+          - 🔐 Fluidd/Mainsail authentication support
+          - 📊 Real-time multi-printer dashboard
+          - 🌡️ Temperature monitoring (Extruder, Bed, Chamber)
+          - 📈 **Temperature graph** with real-time plotting
+          - 📷 **Camera preview** with browser integration
+          - 📊 **Print statistics** (total time, filament, success rate)
+          - 💻 **System info** (Klipper/Moonraker versions, disk usage)
+          - ⚡ Cyberpunk UI with Tiffany Blue accents
+          - 🔤 Play font (VORON style) for UI
           
           ### Download
           - **Windows**: KlipperBuddy.exe
@@ -80,6 +90,11 @@ jobs:
           ### Requirements
           - Windows 10 or later
           - Klipper printer with Moonraker API
+          
+          ### Credits
+          - Inspired by [Bambuddy](https://github.com/maziggy/bambuddy)
+          - Play font by Jonas Hecksher (OFL License)
+          - Title logo uses ToaHI font by Iwata
         files: |
           ./windows/KlipperBuddy.exe
         draft: false
