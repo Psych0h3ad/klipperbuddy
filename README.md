@@ -2,7 +2,7 @@
 
 A desktop application for monitoring and managing Klipper 3D printers via Moonraker API.
 
-Inspired by [Bambuddy](https://github.com/maziggy/bambuddy) for Bambu Lab printers.
+**Inspired by [Bambuddy](https://github.com/maziggy/bambuddy)** (MIT License, Copyright (c) 2025 MartinNYHC) - a self-hosted print archive and management system for Bambu Lab printers. KlipperBuddy adapts the concept for Klipper/Moonraker-based printers.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-green.svg)
@@ -205,12 +205,23 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+### Third-Party Licenses
+
+This project uses the following open-source libraries:
+
+| Library | License | URL |
+|---------|---------|-----|
+| PyQt6 | GPL v3 | https://www.riverbankcomputing.com/software/pyqt/ |
+| aiohttp | Apache 2.0 | https://github.com/aio-libs/aiohttp |
+| zeroconf | LGPL v2.1 | https://github.com/python-zeroconf/python-zeroconf |
+| keyring | MIT | https://github.com/jaraco/keyring |
+
 ## Acknowledgments
 
-- [Bambuddy](https://github.com/maziggy/bambuddy) - Inspiration for this project
-- [Moonraker](https://github.com/Arksine/moonraker) - API server for Klipper
-- [Klipper](https://www.klipper3d.org/) - 3D printer firmware
-- [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) - GUI framework
+- **[Bambuddy](https://github.com/maziggy/bambuddy)** by MartinNYHC - The original inspiration for this project (MIT License)
+- **[Moonraker](https://github.com/Arksine/moonraker)** by Arksine - API server for Klipper (GPL v3)
+- **[Klipper](https://www.klipper3d.org/)** - 3D printer firmware (GPL v3)
+- **[PyQt6](https://www.riverbankcomputing.com/software/pyqt/)** - GUI framework (GPL v3)
 
 ## Changelog
 
