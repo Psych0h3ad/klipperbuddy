@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QGridLayout, QLabel, QPushButton, QLineEdit, QDialog, QDialogButtonBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QProgressBar,
     QMessageBox, QFrame, QScrollArea, QSpinBox, QFormLayout, QGraphicsDropShadowEffect,
-    QSplitter, QGroupBox, QSizePolicy
+    QSplitter, QGroupBox, QSizePolicy, QFileDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QRect, QPoint, QMargins
 from PyQt6.QtGui import (
@@ -370,6 +370,45 @@ class ConfigManager:
     def remove_printer(self, host: str, port: int):
         self.printers = [p for p in self.printers if not (p.host == host and p.port == port)]
         self.save()
+    
+    def get_setting(self, key: str, default=None):
+        """Get a setting value"""
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r') as f:
+                    data = json.load(f)
+                    return data.get('settings', {}).get(key, default)
+            except:
+                pass
+        return default
+    
+    def set_setting(self, key: str, value):
+        """Set a setting value"""
+        data = {}
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r') as f:
+                    data = json.load(f)
+            except:
+                pass
+        
+        if 'settings' not in data:
+            data['settings'] = {}
+        data['settings'][key] = value
+        
+        # Preserve printers data
+        printers_data = []
+        for p in self.printers:
+            p_dict = vars(p).copy()
+            if p_dict.get('password'):
+                p_dict['password'] = self._encrypt(p_dict['password'])
+            if p_dict.get('api_key'):
+                p_dict['api_key'] = self._encrypt(p_dict['api_key'])
+            printers_data.append(p_dict)
+        data['printers'] = printers_data
+        
+        with open(self.config_file, 'w') as f:
+            json.dump(data, f, indent=2)
 
 
 # =============================================================================
@@ -1454,6 +1493,166 @@ class StatsPanel(QFrame):
         
         layout.addWidget(self.shaper_frame)
         
+        # Separator
+        line5 = QFrame()
+        line5.setFrameShape(QFrame.Shape.HLine)
+        line5.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line5)
+        
+        # Printer Control section
+        control_label = QLabel("🎮 PRINTER CONTROL")
+        control_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        control_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(control_label)
+        
+        control_frame = QFrame()
+        control_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+        """)
+        control_layout = QVBoxLayout(control_frame)
+        control_layout.setContentsMargins(8, 8, 8, 8)
+        control_layout.setSpacing(8)
+        
+        # Firmware Restart button
+        self.firmware_restart_btn = QPushButton("🔄 FIRMWARE_RESTART")
+        self.firmware_restart_btn.setFixedHeight(32)
+        self.firmware_restart_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['warning']};
+                border: 1px solid {COLORS['warning']};
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['warning']};
+                color: {COLORS['bg_dark']};
+            }}
+        """)
+        self.firmware_restart_btn.clicked.connect(self._firmware_restart)
+        self.firmware_restart_btn.setEnabled(False)
+        control_layout.addWidget(self.firmware_restart_btn)
+        
+        # Restart button
+        self.restart_btn = QPushButton("🔁 RESTART")
+        self.restart_btn.setFixedHeight(32)
+        self.restart_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['accent']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+                color: {COLORS['bg_dark']};
+            }}
+        """)
+        self.restart_btn.clicked.connect(self._restart_klipper)
+        self.restart_btn.setEnabled(False)
+        control_layout.addWidget(self.restart_btn)
+        
+        # Emergency Stop button
+        self.emergency_stop_btn = QPushButton("🛑 EMERGENCY STOP")
+        self.emergency_stop_btn.setFixedHeight(36)
+        self.emergency_stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['error']};
+                color: {COLORS['text_primary']};
+                border: 2px solid {COLORS['error']};
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: #ff0000;
+                border-color: #ff0000;
+            }}
+        """)
+        self.emergency_stop_btn.clicked.connect(self._emergency_stop)
+        self.emergency_stop_btn.setEnabled(False)
+        control_layout.addWidget(self.emergency_stop_btn)
+        
+        layout.addWidget(control_frame)
+        
+        # Separator
+        line6 = QFrame()
+        line6.setFrameShape(QFrame.Shape.HLine)
+        line6.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line6)
+        
+        # Log Analyzer section
+        log_label = QLabel("📊 LOG ANALYZER")
+        log_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        log_label.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(log_label)
+        
+        log_frame = QFrame()
+        log_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+        """)
+        log_layout = QVBoxLayout(log_frame)
+        log_layout.setContentsMargins(8, 8, 8, 8)
+        log_layout.setSpacing(8)
+        
+        # Log status
+        self.log_status_label = QLabel("No log analyzed yet")
+        self.log_status_label.setFont(QFont("Play", 9))
+        self.log_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.log_status_label.setWordWrap(True)
+        log_layout.addWidget(self.log_status_label)
+        
+        # Error/Warning counts
+        log_stats_layout = QHBoxLayout()
+        self.log_errors_label = QLabel("⚠️ Errors: --")
+        self.log_errors_label.setFont(QFont("Play", 9))
+        self.log_errors_label.setStyleSheet(f"color: {COLORS['error']};")
+        log_stats_layout.addWidget(self.log_errors_label)
+        
+        self.log_warnings_label = QLabel("⚠️ Warnings: --")
+        self.log_warnings_label.setFont(QFont("Play", 9))
+        self.log_warnings_label.setStyleSheet(f"color: {COLORS['warning']};")
+        log_stats_layout.addWidget(self.log_warnings_label)
+        log_layout.addLayout(log_stats_layout)
+        
+        # Analyze Log button
+        self.analyze_log_btn = QPushButton("🔍 Analyze Log")
+        self.analyze_log_btn.setFixedHeight(32)
+        self.analyze_log_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['accent']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+                color: {COLORS['bg_dark']};
+            }}
+        """)
+        self.analyze_log_btn.clicked.connect(self._analyze_log)
+        self.analyze_log_btn.setEnabled(False)
+        log_layout.addWidget(self.analyze_log_btn)
+        
+        # Download Log button
+        self.download_log_btn = QPushButton("💾 Download Log")
+        self.download_log_btn.setFixedHeight(28)
+        self.download_log_btn.clicked.connect(self._download_log)
+        self.download_log_btn.setEnabled(False)
+        log_layout.addWidget(self.download_log_btn)
+        
+        layout.addWidget(log_frame)
+        
         # Store temperature history for PID warning
         self._temp_history_hotend: deque = deque(maxlen=30)
         self._temp_history_bed: deque = deque(maxlen=30)
@@ -1695,6 +1894,173 @@ class StatsPanel(QFrame):
         self._temp_history_hotend.clear()
         self._temp_history_bed.clear()
         self._current_printer_config = None
+        # Clear log analyzer
+        self.log_status_label.setText("No log analyzed yet")
+        self.log_errors_label.setText("⚠️ Errors: --")
+        self.log_warnings_label.setText("⚠️ Warnings: --")
+        self.analyze_log_btn.setEnabled(False)
+        self.download_log_btn.setEnabled(False)
+        # Clear control buttons
+        self.firmware_restart_btn.setEnabled(False)
+        self.restart_btn.setEnabled(False)
+        self.emergency_stop_btn.setEnabled(False)
+    
+    def enable_controls(self, enabled: bool = True):
+        """Enable or disable printer control buttons"""
+        self.firmware_restart_btn.setEnabled(enabled)
+        self.restart_btn.setEnabled(enabled)
+        self.emergency_stop_btn.setEnabled(enabled)
+        self.analyze_log_btn.setEnabled(enabled)
+        self.download_log_btn.setEnabled(enabled)
+    
+    def _firmware_restart(self):
+        """Send FIRMWARE_RESTART command"""
+        if not self._current_printer_config:
+            return
+        
+        reply = QMessageBox.question(
+            self, "Firmware Restart",
+            "Send FIRMWARE_RESTART command?\n\n"
+            "This will restart the Klipper firmware.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.gcode_requested:
+                self.gcode_requested(self._current_printer_config, "FIRMWARE_RESTART")
+    
+    def _restart_klipper(self):
+        """Send RESTART command"""
+        if not self._current_printer_config:
+            return
+        
+        reply = QMessageBox.question(
+            self, "Restart Klipper",
+            "Send RESTART command?\n\n"
+            "This will restart the Klipper host software.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.gcode_requested:
+                self.gcode_requested(self._current_printer_config, "RESTART")
+    
+    def _emergency_stop(self):
+        """Send EMERGENCY_STOP command"""
+        if not self._current_printer_config:
+            return
+        
+        reply = QMessageBox.warning(
+            self, "⚠️ EMERGENCY STOP",
+            "Send M112 EMERGENCY STOP?\n\n"
+            "This will immediately halt the printer!\n"
+            "You will need to restart Klipper after this.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.gcode_requested:
+                self.gcode_requested(self._current_printer_config, "M112")
+    
+    def _analyze_log(self):
+        """Download and analyze klippy.log"""
+        if not self._current_printer_config:
+            return
+        
+        self.log_status_label.setText("Downloading log...")
+        QApplication.processEvents()
+        
+        # Download log via Moonraker API
+        try:
+            import urllib.request
+            url = f"http://{self._current_printer_config.host}:{self._current_printer_config.port}/server/files/klippy.log"
+            req = urllib.request.Request(url, headers={'User-Agent': 'KlipperBuddy'})
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                log_content = response.read().decode('utf-8', errors='ignore')
+            
+            # Analyze log
+            errors = log_content.count('!! ')
+            warnings = log_content.count('// ')
+            
+            # Check for common errors
+            temp_errors = []
+            if 'ADC out of range' in log_content:
+                temp_errors.append('ADC out of range')
+            if 'Heater not heating' in log_content:
+                temp_errors.append('Heater not heating')
+            if 'Timer too close' in log_content:
+                temp_errors.append('Timer too close')
+            if 'MCU' in log_content and 'shutdown' in log_content:
+                temp_errors.append('MCU shutdown')
+            
+            self.log_errors_label.setText(f"❌ Errors: {errors}")
+            self.log_warnings_label.setText(f"⚠️ Warnings: {warnings}")
+            
+            if temp_errors:
+                self.log_status_label.setText(f"Issues found: {', '.join(temp_errors)}")
+                self.log_status_label.setStyleSheet(f"color: {COLORS['error']};")
+            else:
+                self.log_status_label.setText("Log analyzed - No critical issues")
+                self.log_status_label.setStyleSheet(f"color: {COLORS['success']};")
+            
+            # Store log for potential download
+            self._last_log_content = log_content
+            
+        except Exception as e:
+            self.log_status_label.setText(f"Error: {str(e)[:50]}")
+            self.log_status_label.setStyleSheet(f"color: {COLORS['error']};")
+    
+    def _download_log(self):
+        """Download klippy.log to specified folder"""
+        if not self._current_printer_config:
+            return
+        
+        # Get save path from config or use default
+        from pathlib import Path
+        default_path = Path.home() / "Documents" / "KlipperBuddy" / "logs"
+        default_path.mkdir(parents=True, exist_ok=True)
+        
+        # Generate filename with timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        printer_name = self._current_printer_config.name.replace(' ', '_')
+        filename = f"klippy_{printer_name}_{timestamp}.log"
+        
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Save klippy.log",
+            str(default_path / filename),
+            "Log files (*.log);;All files (*.*)"
+        )
+        
+        if not save_path:
+            return
+        
+        self.log_status_label.setText("Downloading...")
+        QApplication.processEvents()
+        
+        try:
+            import urllib.request
+            url = f"http://{self._current_printer_config.host}:{self._current_printer_config.port}/server/files/klippy.log"
+            req = urllib.request.Request(url, headers={'User-Agent': 'KlipperBuddy'})
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                log_content = response.read()
+            
+            with open(save_path, 'wb') as f:
+                f.write(log_content)
+            
+            self.log_status_label.setText(f"Saved to: {Path(save_path).name}")
+            self.log_status_label.setStyleSheet(f"color: {COLORS['success']};")
+            
+            QMessageBox.information(
+                self, "Download Complete",
+                f"Log saved to:\n{save_path}"
+            )
+            
+        except Exception as e:
+            self.log_status_label.setText(f"Error: {str(e)[:50]}")
+            self.log_status_label.setStyleSheet(f"color: {COLORS['error']};")
 
 
 # =============================================================================
@@ -1907,6 +2273,195 @@ class AddPrinterDialog(QDialog):
 
 
 # =============================================================================
+# Settings Dialog
+# =============================================================================
+
+class SettingsDialog(QDialog):
+    """Settings dialog for KlipperBuddy"""
+    
+    def __init__(self, config_manager, parent=None):
+        super().__init__(parent)
+        self.config_manager = config_manager
+        self.setWindowTitle("⚙️ Settings")
+        self.setFixedSize(500, 400)
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        
+        # Header
+        header = QLabel("⚙️ KlipperBuddy Settings")
+        header.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addWidget(header)
+        
+        # Log folder setting
+        log_group = QGroupBox("Log Files")
+        log_layout = QVBoxLayout(log_group)
+        
+        log_path_layout = QHBoxLayout()
+        log_path_layout.addWidget(QLabel("Log Save Folder:"))
+        self.log_path_edit = QLineEdit()
+        self.log_path_edit.setText(str(self.config_manager.get_setting('log_folder', str(Path.home() / 'Documents' / 'KlipperBuddy' / 'logs'))))
+        self.log_path_edit.setReadOnly(True)
+        log_path_layout.addWidget(self.log_path_edit)
+        
+        self.browse_log_btn = QPushButton("📁 Browse")
+        self.browse_log_btn.clicked.connect(self._browse_log_folder)
+        log_path_layout.addWidget(self.browse_log_btn)
+        log_layout.addLayout(log_path_layout)
+        
+        layout.addWidget(log_group)
+        
+        # Shortcuts group
+        shortcut_group = QGroupBox("Shortcuts")
+        shortcut_layout = QVBoxLayout(shortcut_group)
+        
+        shortcut_desc = QLabel("Create shortcuts to launch KlipperBuddy easily")
+        shortcut_desc.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        shortcut_layout.addWidget(shortcut_desc)
+        
+        btn_layout = QHBoxLayout()
+        
+        self.desktop_shortcut_btn = QPushButton("🖥️ Create Desktop Shortcut")
+        self.desktop_shortcut_btn.clicked.connect(self._create_desktop_shortcut)
+        btn_layout.addWidget(self.desktop_shortcut_btn)
+        
+        self.startmenu_shortcut_btn = QPushButton("📁 Create Start Menu Shortcut")
+        self.startmenu_shortcut_btn.clicked.connect(self._create_startmenu_shortcut)
+        btn_layout.addWidget(self.startmenu_shortcut_btn)
+        
+        shortcut_layout.addLayout(btn_layout)
+        layout.addWidget(shortcut_group)
+        
+        # Auto-scan setting
+        scan_group = QGroupBox("Startup")
+        scan_layout = QVBoxLayout(scan_group)
+        
+        self.auto_scan_check = QCheckBox("Auto-scan network on startup")
+        self.auto_scan_check.setChecked(self.config_manager.get_setting('auto_scan', True))
+        scan_layout.addWidget(self.auto_scan_check)
+        
+        layout.addWidget(scan_group)
+        
+        layout.addStretch()
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._save_and_close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+    
+    def _browse_log_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Log Folder",
+            self.log_path_edit.text()
+        )
+        if folder:
+            self.log_path_edit.setText(folder)
+    
+    def _create_desktop_shortcut(self):
+        """Create desktop shortcut"""
+        try:
+            import sys
+            exe_path = sys.executable if getattr(sys, 'frozen', False) else __file__
+            
+            if sys.platform == 'win32':
+                # Windows shortcut
+                desktop = Path.home() / 'Desktop'
+                shortcut_path = desktop / 'KlipperBuddy.lnk'
+                
+                try:
+                    import winshell
+                    from win32com.client import Dispatch
+                    
+                    shell = Dispatch('WScript.Shell')
+                    shortcut = shell.CreateShortCut(str(shortcut_path))
+                    shortcut.Targetpath = exe_path
+                    shortcut.WorkingDirectory = str(Path(exe_path).parent)
+                    shortcut.IconLocation = exe_path
+                    shortcut.save()
+                    
+                    QMessageBox.information(self, "Success", f"Desktop shortcut created!\n{shortcut_path}")
+                except ImportError:
+                    # Fallback: create batch file
+                    batch_path = desktop / 'KlipperBuddy.bat'
+                    with open(batch_path, 'w') as f:
+                        f.write(f'@echo off\nstart "" "{exe_path}"\n')
+                    QMessageBox.information(self, "Success", f"Desktop shortcut created!\n{batch_path}")
+            else:
+                # Linux/Mac
+                desktop = Path.home() / 'Desktop'
+                shortcut_path = desktop / 'KlipperBuddy.desktop'
+                
+                with open(shortcut_path, 'w') as f:
+                    f.write(f"""[Desktop Entry]
+Name=KlipperBuddy
+Exec={exe_path}
+Type=Application
+Terminal=false
+Icon=printer
+""")
+                shortcut_path.chmod(0o755)
+                QMessageBox.information(self, "Success", f"Desktop shortcut created!\n{shortcut_path}")
+                
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to create shortcut:\n{str(e)}")
+    
+    def _create_startmenu_shortcut(self):
+        """Create start menu shortcut"""
+        try:
+            import sys
+            exe_path = sys.executable if getattr(sys, 'frozen', False) else __file__
+            
+            if sys.platform == 'win32':
+                # Windows Start Menu
+                start_menu = Path.home() / 'AppData' / 'Roaming' / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs'
+                shortcut_path = start_menu / 'KlipperBuddy.lnk'
+                
+                try:
+                    import winshell
+                    from win32com.client import Dispatch
+                    
+                    shell = Dispatch('WScript.Shell')
+                    shortcut = shell.CreateShortCut(str(shortcut_path))
+                    shortcut.Targetpath = exe_path
+                    shortcut.WorkingDirectory = str(Path(exe_path).parent)
+                    shortcut.IconLocation = exe_path
+                    shortcut.save()
+                    
+                    QMessageBox.information(self, "Success", f"Start Menu shortcut created!\n{shortcut_path}")
+                except ImportError:
+                    QMessageBox.warning(self, "Note", "Install 'pywin32' for proper Windows shortcuts.\nRun: pip install pywin32")
+            else:
+                # Linux applications menu
+                apps_dir = Path.home() / '.local' / 'share' / 'applications'
+                apps_dir.mkdir(parents=True, exist_ok=True)
+                shortcut_path = apps_dir / 'klipperbuddy.desktop'
+                
+                with open(shortcut_path, 'w') as f:
+                    f.write(f"""[Desktop Entry]
+Name=KlipperBuddy
+Exec={exe_path}
+Type=Application
+Terminal=false
+Icon=printer
+Categories=Utility;
+""")
+                QMessageBox.information(self, "Success", f"Applications menu shortcut created!\n{shortcut_path}")
+                
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to create shortcut:\n{str(e)}")
+    
+    def _save_and_close(self):
+        """Save settings and close dialog"""
+        self.config_manager.set_setting('log_folder', self.log_path_edit.text())
+        self.config_manager.set_setting('auto_scan', self.auto_scan_check.isChecked())
+        self.accept()
+
+
+# =============================================================================
 # Main Window
 # =============================================================================
 
@@ -2037,6 +2592,10 @@ class MainWindow(QMainWindow):
         self.refresh_btn.clicked.connect(self._refresh_all_status)
         header_layout.addWidget(self.refresh_btn)
         
+        self.settings_btn = QPushButton("⚙️ Settings")
+        self.settings_btn.clicked.connect(self._show_settings_dialog)
+        header_layout.addWidget(self.settings_btn)
+        
         main_layout.addLayout(header_layout)
         
         # Separator
@@ -2154,6 +2713,11 @@ class MainWindow(QMainWindow):
                 self._refresh_all_status()
             else:
                 QMessageBox.warning(self, "Error", "Printer already exists!")
+    
+    def _show_settings_dialog(self):
+        """Show settings dialog"""
+        dialog = SettingsDialog(self.config_manager, self)
+        dialog.exec()
     
     def _on_camera_clicked(self, webcam_url: str):
         self.stats_panel.set_webcam_url(webcam_url)
