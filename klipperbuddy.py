@@ -2856,40 +2856,69 @@ class MainWindow(QMainWindow):
 # =============================================================================
 
 def main():
-    app = QApplication(sys.argv)
-    app.setStyle('Fusion')
+    # Setup error logging
+    import traceback
+    from datetime import datetime
     
-    # Load Play font
-    font_path = resource_path("Play-Regular.ttf")
-    if os.path.exists(font_path):
-        QFontDatabase.addApplicationFont(font_path)
+    log_dir = Path.home() / ".klipperbuddy"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    error_log_path = log_dir / "error.log"
     
-    font_bold_path = resource_path("Play-Bold.ttf")
-    if os.path.exists(font_bold_path):
-        QFontDatabase.addApplicationFont(font_bold_path)
+    def log_error(exc_type, exc_value, exc_tb):
+        """Log uncaught exceptions to file"""
+        with open(error_log_path, 'a') as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"{'='*60}\n")
+            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        # Also call default handler
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
     
-    # Set default font
-    app.setFont(QFont("Play", 10))
+    sys.excepthook = log_error
     
-    app.setStyleSheet(STYLESHEET)
-    
-    # Set dark palette
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(COLORS['bg_dark']))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(COLORS['text_primary']))
-    palette.setColor(QPalette.ColorRole.Base, QColor(COLORS['bg_card']))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(COLORS['bg_dark']))
-    palette.setColor(QPalette.ColorRole.Text, QColor(COLORS['text_primary']))
-    palette.setColor(QPalette.ColorRole.Button, QColor(COLORS['bg_card']))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(COLORS['accent']))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(COLORS['accent']))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(COLORS['bg_dark']))
-    app.setPalette(palette)
-    
-    window = MainWindow()
-    window.show()
-    
-    sys.exit(app.exec())
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle('Fusion')
+        
+        # Load Play font
+        font_path = resource_path("Play-Regular.ttf")
+        if os.path.exists(font_path):
+            QFontDatabase.addApplicationFont(font_path)
+        
+        font_bold_path = resource_path("Play-Bold.ttf")
+        if os.path.exists(font_bold_path):
+            QFontDatabase.addApplicationFont(font_bold_path)
+        
+        # Set default font
+        app.setFont(QFont("Play", 10))
+        
+        app.setStyleSheet(STYLESHEET)
+        
+        # Set dark palette
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(COLORS['bg_dark']))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(COLORS['text_primary']))
+        palette.setColor(QPalette.ColorRole.Base, QColor(COLORS['bg_card']))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(COLORS['bg_dark']))
+        palette.setColor(QPalette.ColorRole.Text, QColor(COLORS['text_primary']))
+        palette.setColor(QPalette.ColorRole.Button, QColor(COLORS['bg_card']))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(COLORS['accent']))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(COLORS['accent']))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(COLORS['bg_dark']))
+        app.setPalette(palette)
+        
+        window = MainWindow()
+        window.show()
+        
+        sys.exit(app.exec())
+    except Exception as e:
+        # Log startup error
+        with open(error_log_path, 'a') as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"Startup Error: {datetime.now().isoformat()}\n")
+            f.write(f"{'='*60}\n")
+            traceback.print_exc(file=f)
+        raise
 
 
 if __name__ == "__main__":
