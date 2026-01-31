@@ -6,5 +6,8 @@ PyQt6>=6.4.0
 # Async HTTP Client
 aiohttp>=3.8.0
 
+# Encryption for password storage
+cryptography>=41.0.0
+
 # Build Tools (development only)
 pyinstaller>=5.0.0

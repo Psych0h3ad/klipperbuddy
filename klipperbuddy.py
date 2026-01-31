@@ -33,6 +33,10 @@ from PyQt6.QtGui import (
 )
 
 import aiohttp
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # =============================================================================
 # Resource Path Helper (for PyInstaller)
@@ -279,21 +283,79 @@ class ConfigManager:
     def __init__(self):
         self.config_dir = Path.home() / ".klipperbuddy"
         self.config_file = self.config_dir / "config.json"
+        self.key_file = self.config_dir / ".key"
         self.printers: List[PrinterConfig] = []
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        self._fernet = self._get_fernet()
         self.load()
+    
+    def _get_fernet(self) -> Fernet:
+        """Get or create encryption key"""
+        if self.key_file.exists():
+            with open(self.key_file, 'rb') as f:
+                key = f.read()
+        else:
+            # Generate a key based on machine-specific data
+            salt = b'klipperbuddy_salt_v1'
+            machine_id = (socket.gethostname() + str(Path.home())).encode()
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(machine_id))
+            with open(self.key_file, 'wb') as f:
+                f.write(key)
+            # Make key file readable only by owner
+            try:
+                os.chmod(self.key_file, 0o600)
+            except:
+                pass
+        return Fernet(key)
+    
+    def _encrypt(self, text: str) -> str:
+        """Encrypt sensitive data"""
+        if not text:
+            return ""
+        return self._fernet.encrypt(text.encode()).decode()
+    
+    def _decrypt(self, encrypted: str) -> str:
+        """Decrypt sensitive data"""
+        if not encrypted:
+            return ""
+        try:
+            return self._fernet.decrypt(encrypted.encode()).decode()
+        except:
+            return encrypted  # Return as-is if decryption fails (legacy plain text)
     
     def load(self):
         if self.config_file.exists():
             try:
                 with open(self.config_file, 'r') as f:
                     data = json.load(f)
-                    self.printers = [PrinterConfig(**p) for p in data.get('printers', [])]
+                    self.printers = []
+                    for p in data.get('printers', []):
+                        # Decrypt sensitive fields
+                        if 'password' in p and p['password']:
+                            p['password'] = self._decrypt(p['password'])
+                        if 'api_key' in p and p['api_key']:
+                            p['api_key'] = self._decrypt(p['api_key'])
+                        self.printers.append(PrinterConfig(**p))
             except:
                 self.printers = []
     
     def save(self):
-        data = {'printers': [vars(p) for p in self.printers]}
+        printers_data = []
+        for p in self.printers:
+            p_dict = vars(p).copy()
+            # Encrypt sensitive fields
+            if p_dict.get('password'):
+                p_dict['password'] = self._encrypt(p_dict['password'])
+            if p_dict.get('api_key'):
+                p_dict['api_key'] = self._encrypt(p_dict['api_key'])
+            printers_data.append(p_dict)
+        data = {'printers': printers_data}
         with open(self.config_file, 'w') as f:
             json.dump(data, f, indent=2)
     
@@ -773,7 +835,7 @@ class PrinterCard(QFrame):
     """Cyberpunk-style printer status card"""
     
     camera_clicked = pyqtSignal(str)  # webcam_url
-    graph_clicked = pyqtSignal(object)  # self
+    card_clicked = pyqtSignal(object)  # self - emitted when card is clicked
     
     def __init__(self, config: PrinterConfig, parent=None):
         super().__init__(parent)
@@ -782,6 +844,7 @@ class PrinterCard(QFrame):
         self.stats = PrinterStats()
         self.system_info = SystemInfo()
         self.client: Optional[MoonrakerClient] = None
+        self._selected = False
         self._setup_ui()
         self._apply_style()
     
@@ -821,8 +884,15 @@ class PrinterCard(QFrame):
         temp_layout.setSpacing(4)
         
         # Extruder
-        ext_icon = QLabel("🔥")
-        ext_icon.setFont(QFont("Segoe UI Emoji", 14))
+        ext_icon = QLabel()
+        ext_icon_path = resource_path("icons/icon_hotend.png")
+        if os.path.exists(ext_icon_path):
+            ext_pixmap = QPixmap(ext_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            ext_icon.setPixmap(ext_pixmap)
+        else:
+            ext_icon.setText("🔥")
+            ext_icon.setFont(QFont("Segoe UI Emoji", 14))
+        ext_icon.setFixedSize(24, 24)
         temp_layout.addWidget(ext_icon, 0, 0)
         
         ext_label = QLabel("Extruder")
@@ -836,8 +906,15 @@ class PrinterCard(QFrame):
         temp_layout.addWidget(self.ext_temp_label, 0, 2)
         
         # Bed
-        bed_icon = QLabel("🛏️")
-        bed_icon.setFont(QFont("Segoe UI Emoji", 14))
+        bed_icon = QLabel()
+        bed_icon_path = resource_path("icons/icon_bed.png")
+        if os.path.exists(bed_icon_path):
+            bed_pixmap = QPixmap(bed_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            bed_icon.setPixmap(bed_pixmap)
+        else:
+            bed_icon.setText("🛏️")
+            bed_icon.setFont(QFont("Segoe UI Emoji", 14))
+        bed_icon.setFixedSize(24, 24)
         temp_layout.addWidget(bed_icon, 1, 0)
         
         bed_label = QLabel("Bed")
@@ -851,8 +928,15 @@ class PrinterCard(QFrame):
         temp_layout.addWidget(self.bed_temp_label, 1, 2)
         
         # Chamber
-        chamber_icon = QLabel("📦")
-        chamber_icon.setFont(QFont("Segoe UI Emoji", 14))
+        chamber_icon = QLabel()
+        chamber_icon_path = resource_path("icons/icon_chamber.png")
+        if os.path.exists(chamber_icon_path):
+            chamber_pixmap = QPixmap(chamber_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            chamber_icon.setPixmap(chamber_pixmap)
+        else:
+            chamber_icon.setText("📦")
+            chamber_icon.setFont(QFont("Segoe UI Emoji", 14))
+        chamber_icon.setFixedSize(24, 24)
         temp_layout.addWidget(chamber_icon, 2, 0)
         
         chamber_label = QLabel("Chamber")
@@ -907,13 +991,23 @@ class PrinterCard(QFrame):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
         
-        self.camera_btn = QPushButton("📷")
+        self.camera_btn = QPushButton()
+        camera_icon_path = resource_path("icons/icon_camera.png")
+        if os.path.exists(camera_icon_path):
+            self.camera_btn.setIcon(QPixmap(camera_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.camera_btn.setText("📷")
         self.camera_btn.setFixedSize(40, 32)
         self.camera_btn.setToolTip("View Camera")
         self.camera_btn.clicked.connect(self._on_camera_click)
         btn_layout.addWidget(self.camera_btn)
         
-        self.graph_btn = QPushButton("📈")
+        self.graph_btn = QPushButton()
+        graph_icon_path = resource_path("icons/icon_graph.png")
+        if os.path.exists(graph_icon_path):
+            self.graph_btn.setIcon(QPixmap(graph_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.graph_btn.setText("📈")
         self.graph_btn.setFixedSize(40, 32)
         self.graph_btn.setToolTip("Temperature Graph")
         self.graph_btn.clicked.connect(self._on_graph_click)
@@ -934,24 +1028,45 @@ class PrinterCard(QFrame):
         self.host_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
         layout.addWidget(self.host_label)
     
-    def _apply_style(self):
-        self.setStyleSheet(f"""
-            PrinterCard {{
-                background-color: {COLORS['bg_card']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-            }}
-            PrinterCard:hover {{
-                border-color: {COLORS['accent']};
-            }}
-        """)
-        
-        # Add glow effect
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(COLORS['accent']))
-        shadow.setOffset(0, 0)
-        self.setGraphicsEffect(shadow)
+    def _apply_style(self, selected: bool = False):
+        if selected:
+            self.setStyleSheet(f"""
+                PrinterCard {{
+                    background-color: {COLORS['bg_card']};
+                    border: 2px solid {COLORS['accent']};
+                    border-radius: 8px;
+                }}
+            """)
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(25)
+            shadow.setColor(QColor(COLORS['accent']))
+            shadow.setOffset(0, 0)
+            self.setGraphicsEffect(shadow)
+        else:
+            self.setStyleSheet(f"""
+                PrinterCard {{
+                    background-color: {COLORS['bg_card']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 8px;
+                }}
+                PrinterCard:hover {{
+                    border-color: {COLORS['accent']};
+                }}
+            """)
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(15)
+            shadow.setColor(QColor(COLORS['accent']))
+            shadow.setOffset(0, 0)
+            self.setGraphicsEffect(shadow)
+    
+    def set_selected(self, selected: bool):
+        self._selected = selected
+        self._apply_style(selected)
+    
+    def mousePressEvent(self, event):
+        """Handle card click to select this printer"""
+        self.card_clicked.emit(self)
+        super().mousePressEvent(event)
     
     def _on_camera_click(self):
         if self.system_info.webcam_url:
@@ -962,7 +1077,7 @@ class PrinterCard(QFrame):
             self.camera_clicked.emit(url)
     
     def _on_graph_click(self):
-        self.graph_clicked.emit(self)
+        self.card_clicked.emit(self)
     
     def _on_web_click(self):
         url = f"http://{self.config.host}"
@@ -1042,13 +1157,22 @@ class StatsPanel(QFrame):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         
+        # Selected printer name
+        self.printer_name_label = QLabel("Select a printer")
+        self.printer_name_label.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        self.printer_name_label.setStyleSheet(f"color: {COLORS['accent']};")
+        self.printer_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.printer_name_label)
+        
         # Temperature Graph
         graph_label = QLabel("📈 TEMPERATURE GRAPH")
-        graph_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
-        graph_label.setStyleSheet(f"color: {COLORS['accent']};")
+        graph_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
+        graph_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(graph_label)
         
         self.temp_chart = TemperatureChart()
+        self.temp_chart.setMinimumHeight(150)
+        self.temp_chart.setMaximumHeight(150)
         layout.addWidget(self.temp_chart)
         
         # Current temps display
@@ -1079,12 +1203,12 @@ class StatsPanel(QFrame):
         
         # Camera Preview section
         cam_label = QLabel("📷 CAMERA PREVIEW")
-        cam_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
-        cam_label.setStyleSheet(f"color: {COLORS['accent']};")
+        cam_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
+        cam_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(cam_label)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(120)
+        self.camera_frame.setFixedHeight(140)
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
@@ -1092,13 +1216,19 @@ class StatsPanel(QFrame):
         """)
         
         cam_layout = QVBoxLayout(self.camera_frame)
-        self.camera_placeholder = QLabel("📷 Click camera button on a printer card")
-        self.camera_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_placeholder.setStyleSheet(f"color: {COLORS['text_muted']};")
-        self.camera_placeholder.setFont(QFont("Play", 10))
-        cam_layout.addWidget(self.camera_placeholder)
+        cam_layout.setContentsMargins(4, 4, 4, 4)
+        cam_layout.setSpacing(4)
+        
+        self.camera_image = QLabel()
+        self.camera_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.camera_image.setStyleSheet(f"color: {COLORS['text_muted']};")
+        self.camera_image.setFont(QFont("Play", 9))
+        self.camera_image.setText("Click a printer to view camera")
+        self.camera_image.setMinimumHeight(90)
+        cam_layout.addWidget(self.camera_image)
         
         self.open_camera_btn = QPushButton("Open in Browser")
+        self.open_camera_btn.setFixedHeight(28)
         self.open_camera_btn.setEnabled(False)
         self.open_camera_btn.clicked.connect(self._open_camera)
         cam_layout.addWidget(self.open_camera_btn)
@@ -1106,6 +1236,11 @@ class StatsPanel(QFrame):
         layout.addWidget(self.camera_frame)
         
         self.current_webcam_url = ""
+        
+        # Camera refresh timer
+        self.camera_timer = QTimer()
+        self.camera_timer.timeout.connect(self._refresh_camera)
+        self._camera_session = None
         
         # Separator
         line2 = QFrame()
@@ -1214,10 +1349,43 @@ class StatsPanel(QFrame):
         if self.current_webcam_url:
             webbrowser.open(self.current_webcam_url)
     
+    def _refresh_camera(self):
+        """Refresh camera image from stream"""
+        if not self.current_webcam_url:
+            return
+        
+        try:
+            import urllib.request
+            # For snapshot URL, try common patterns
+            snapshot_url = self.current_webcam_url.replace('?action=stream', '?action=snapshot')
+            if 'snapshot' not in snapshot_url:
+                snapshot_url = self.current_webcam_url.rstrip('/') + '?action=snapshot'
+            
+            req = urllib.request.Request(snapshot_url, headers={'User-Agent': 'KlipperBuddy'})
+            with urllib.request.urlopen(req, timeout=2) as response:
+                data = response.read()
+                pixmap = QPixmap()
+                pixmap.loadFromData(data)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(
+                        self.camera_image.width() - 10,
+                        self.camera_image.height() - 10,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    self.camera_image.setPixmap(scaled)
+        except Exception as e:
+            self.camera_image.setText(f"Camera unavailable")
+    
     def set_webcam_url(self, url: str):
         self.current_webcam_url = url
-        self.camera_placeholder.setText(f"📷 {url[:40]}..." if len(url) > 40 else f"📷 {url}")
         self.open_camera_btn.setEnabled(True)
+        # Start camera refresh
+        self.camera_timer.start(2000)  # Refresh every 2 seconds
+        self._refresh_camera()  # Immediate first refresh
+    
+    def set_printer_name(self, name: str):
+        self.printer_name_label.setText(f"📊 {name}")
     
     def update_temps(self, hotend: float, bed: float, chamber: float):
         self.temp_chart.add_data(hotend, bed, chamber)
@@ -1284,9 +1452,12 @@ class StatsPanel(QFrame):
         self.os_label.setText("--")
         self.disk_label.setText("-- / --")
         self.disk_bar.setValue(0)
-        self.camera_placeholder.setText("📷 Click camera button on a printer card")
+        self.camera_image.setText("Click a printer to view camera")
+        self.camera_image.setPixmap(QPixmap())  # Clear any existing image
         self.open_camera_btn.setEnabled(False)
         self.current_webcam_url = ""
+        self.camera_timer.stop()
+        self.printer_name_label.setText("Select a printer")
 
 
 # =============================================================================
@@ -1512,6 +1683,7 @@ class MainWindow(QMainWindow):
         self.printer_cards: Dict[str, PrinterCard] = {}
         self.update_workers: List[AsyncWorker] = []
         self.selected_printer: Optional[PrinterCard] = None
+        self._startup_scan_done = False
         
         self._setup_ui()
         self._load_printers()
@@ -1520,6 +1692,57 @@ class MainWindow(QMainWindow):
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self._refresh_all_status)
         self.refresh_timer.start(3000)  # Refresh every 3 seconds
+    
+    def showEvent(self, event):
+        """Run auto-scan on first show"""
+        super().showEvent(event)
+        if not self._startup_scan_done:
+            self._startup_scan_done = True
+            # Delay scan slightly to allow window to fully render
+            QTimer.singleShot(500, self._auto_scan_network)
+    
+    def _auto_scan_network(self):
+        """Automatically scan network on startup"""
+        self.status_label.setText("Scanning network for printers...")
+        
+        # Run scan in background
+        async def scan():
+            scanner = NetworkScanner()
+            return await scanner.scan_network()
+        
+        def on_result(printers):
+            if printers:
+                added_count = 0
+                for p in printers:
+                    # Check if printer already exists
+                    exists = any(
+                        pc.host == p['host'] and pc.port == p['port']
+                        for pc in self.config_manager.printers
+                    )
+                    if not exists:
+                        config = PrinterConfig(
+                            name=p['name'],
+                            host=p['host'],
+                            port=p['port'],
+                            enabled=True
+                        )
+                        if self.config_manager.add_printer(config):
+                            self._add_printer_card(config)
+                            added_count += 1
+                
+                if added_count > 0:
+                    self.status_label.setText(f"Found {added_count} new printer(s)")
+                else:
+                    self.status_label.setText(f"Scan complete - {len(printers)} printer(s) online")
+                self._refresh_all_status()
+            else:
+                self.status_label.setText("No printers found on network")
+        
+        worker = AsyncWorker(scan)
+        worker.result_ready.connect(on_result)
+        worker.error_occurred.connect(lambda e: self.status_label.setText(f"Scan error: {e}"))
+        self.update_workers.append(worker)
+        worker.start()
     
     def _setup_ui(self):
         central = QWidget()
@@ -1532,7 +1755,15 @@ class MainWindow(QMainWindow):
         # Header
         header_layout = QHBoxLayout()
         
-        # Logo image
+        # P3D Logo
+        p3d_logo_path = resource_path("p3d_logo.png")
+        if os.path.exists(p3d_logo_path):
+            p3d_pixmap = QPixmap(p3d_logo_path)
+            p3d_label = QLabel()
+            p3d_label.setPixmap(p3d_pixmap.scaledToHeight(36, Qt.TransformationMode.SmoothTransformation))
+            header_layout.addWidget(p3d_label)
+        
+        # KlipperBuddy title logo
         logo_path = resource_path("title_logo.png")
         if os.path.exists(logo_path):
             logo_pixmap = QPixmap(logo_path)
@@ -1629,7 +1860,7 @@ class MainWindow(QMainWindow):
         
         card = PrinterCard(config)
         card.camera_clicked.connect(self._on_camera_clicked)
-        card.graph_clicked.connect(self._on_graph_clicked)
+        card.card_clicked.connect(self._on_card_clicked)
         self.printer_cards[key] = card
         
         # Add to grid
@@ -1687,14 +1918,29 @@ class MainWindow(QMainWindow):
     def _on_camera_clicked(self, webcam_url: str):
         self.stats_panel.set_webcam_url(webcam_url)
     
-    def _on_graph_clicked(self, card: PrinterCard):
+    def _on_card_clicked(self, card: PrinterCard):
+        """Handle card selection"""
+        # Deselect previous card
+        if self.selected_printer and self.selected_printer != card:
+            self.selected_printer.set_selected(False)
+        
+        # Select new card
         self.selected_printer = card
+        card.set_selected(True)
+        
+        # Update stats panel
         self.stats_panel.clear()
-        # Update stats panel with this printer's data
+        self.stats_panel.set_printer_name(card.config.name or card.config.host)
         self.stats_panel.update_stats(card.stats)
         self.stats_panel.update_system_info(card.system_info)
+        
+        # Set webcam URL
         if card.system_info.webcam_url:
             self.stats_panel.set_webcam_url(card.system_info.webcam_url)
+        else:
+            # Try default webcam URL
+            default_url = f"http://{card.config.host}/webcam/?action=stream"
+            self.stats_panel.set_webcam_url(default_url)
     
     def _refresh_all_status(self):
         for key, card in self.printer_cards.items():
@@ -1750,7 +1996,7 @@ class MainWindow(QMainWindow):
             # If no printer selected, select the first one
             if self.selected_printer is None and self.printer_cards:
                 first_card = list(self.printer_cards.values())[0]
-                self._on_graph_clicked(first_card)
+                self._on_card_clicked(first_card)
         
         # Clean up finished workers
         self.update_workers = [w for w in self.update_workers if w.isRunning()]
