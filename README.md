@@ -90,6 +90,7 @@ KlipperBuddy uses the following Moonraker API endpoints:
 - **[Bambuddy](https://github.com/maziggy/bambuddy)** - Inspiration for this project
 - **[Moonraker](https://github.com/Arksine/moonraker)** - API server for Klipper
 - **[Klipper](https://github.com/Klipper3d/klipper)** - 3D printer firmware
+- **[Klipper Log Visualizer](https://sineos.github.io/)** - sineos - Log analysis tool integration
 - **[Play Font](https://fonts.google.com/specimen/Play)** - Jonas Hecksher (OFL License)
 - **ToaHI Font** - Iwata Corporation (title logo only)
 

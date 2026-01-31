@@ -262,6 +262,12 @@ class SystemInfo:
     disk_free: int = 0  # bytes
     cpu_temp: float = 0.0
     webcam_url: str = ""
+    # Multi-color unit info (MMU/ERCF/AFC)
+    mmu_type: str = ""  # "MMU", "ERCF", "AFC", "Tradrack", etc.
+    mmu_enabled: bool = False
+    mmu_gate_count: int = 0
+    mmu_current_gate: int = -1
+    mmu_filament_loaded: bool = False
 
 
 @dataclass
@@ -643,6 +649,51 @@ class MoonrakerClient:
                             info.webcam_url = f"http://{self.host}{stream_url}"
                         else:
                             info.webcam_url = stream_url
+        except:
+            pass
+        
+        # Check for Multi-Color Units (MMU/ERCF/AFC/Tradrack)
+        try:
+            # Query for various MMU systems
+            resp = await self._request('GET', 
+                '/printer/objects/query?mmu&ercf&AFC&tradrack')
+            if resp and 'result' in resp:
+                data = resp['result'].get('status', {})
+                
+                # Check for Happy Hare MMU (most common)
+                mmu = data.get('mmu', {})
+                if mmu:
+                    info.mmu_enabled = True
+                    info.mmu_type = "MMU"
+                    info.mmu_gate_count = mmu.get('num_gates', mmu.get('gate_count', 0))
+                    info.mmu_current_gate = mmu.get('gate', mmu.get('tool', -1))
+                    info.mmu_filament_loaded = mmu.get('filament_loaded', False)
+                
+                # Check for ERCF
+                ercf = data.get('ercf', {})
+                if ercf and not info.mmu_enabled:
+                    info.mmu_enabled = True
+                    info.mmu_type = "ERCF"
+                    info.mmu_gate_count = ercf.get('num_gates', 0)
+                    info.mmu_current_gate = ercf.get('gate', -1)
+                    info.mmu_filament_loaded = ercf.get('is_loaded', False)
+                
+                # Check for AFC (Armored Turtle)
+                afc = data.get('AFC', {})
+                if afc and not info.mmu_enabled:
+                    info.mmu_enabled = True
+                    info.mmu_type = "AFC"
+                    info.mmu_gate_count = afc.get('lane_count', 0)
+                    info.mmu_current_gate = afc.get('current_lane', -1)
+                    info.mmu_filament_loaded = afc.get('loaded', False)
+                
+                # Check for Tradrack
+                tradrack = data.get('tradrack', {})
+                if tradrack and not info.mmu_enabled:
+                    info.mmu_enabled = True
+                    info.mmu_type = "Tradrack"
+                    info.mmu_gate_count = tradrack.get('num_lanes', 0)
+                    info.mmu_current_gate = tradrack.get('current_lane', -1)
         except:
             pass
         
@@ -1207,6 +1258,13 @@ class PrinterCard(QFrame):
     def set_name(self, name: str):
         self.config.name = name
         self.name_label.setText(name)
+    
+    def update_privacy_mode(self, privacy_enabled: bool):
+        """Update display based on privacy mode setting"""
+        if privacy_enabled:
+            self.host_label.setText("***")
+        else:
+            self.host_label.setText(f"{self.config.host}:{self.config.port}")
 
 
 # =============================================================================
@@ -1402,6 +1460,74 @@ class StatsPanel(QFrame):
         self.disk_bar.setFixedHeight(8)
         self.disk_bar.setTextVisible(False)
         layout.addWidget(self.disk_bar)
+        
+        # Separator
+        line_mmu = QFrame()
+        line_mmu.setFrameShape(QFrame.Shape.HLine)
+        line_mmu.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line_mmu)
+        
+        # Multi-Color Unit section (MMU/ERCF/AFC)
+        self.mmu_section = QWidget()
+        mmu_layout = QVBoxLayout(self.mmu_section)
+        mmu_layout.setContentsMargins(0, 0, 0, 0)
+        mmu_layout.setSpacing(4)
+        
+        self.mmu_label = QLabel("🎨 MULTI-COLOR UNIT")
+        self.mmu_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        self.mmu_label.setStyleSheet(f"color: {COLORS['accent']};")
+        mmu_layout.addWidget(self.mmu_label)
+        
+        self.mmu_frame = QFrame()
+        self.mmu_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+        """)
+        mmu_frame_layout = QVBoxLayout(self.mmu_frame)
+        mmu_frame_layout.setContentsMargins(8, 8, 8, 8)
+        mmu_frame_layout.setSpacing(4)
+        
+        # MMU Type
+        mmu_type_layout = QHBoxLayout()
+        mmu_type_layout.addWidget(QLabel("Type:"))
+        self.mmu_type_label = QLabel("--")
+        self.mmu_type_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.mmu_type_label.setStyleSheet(f"color: {COLORS['accent']};")
+        mmu_type_layout.addWidget(self.mmu_type_label)
+        mmu_type_layout.addStretch()
+        mmu_frame_layout.addLayout(mmu_type_layout)
+        
+        # Gate info
+        mmu_gate_layout = QHBoxLayout()
+        mmu_gate_layout.addWidget(QLabel("Gates:"))
+        self.mmu_gate_label = QLabel("--")
+        self.mmu_gate_label.setFont(QFont("Play", 10))
+        mmu_gate_layout.addWidget(self.mmu_gate_label)
+        mmu_gate_layout.addStretch()
+        mmu_frame_layout.addLayout(mmu_gate_layout)
+        
+        # Current gate
+        mmu_current_layout = QHBoxLayout()
+        mmu_current_layout.addWidget(QLabel("Current:"))
+        self.mmu_current_label = QLabel("--")
+        self.mmu_current_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.mmu_current_label.setStyleSheet(f"color: {COLORS['success']};")
+        mmu_current_layout.addWidget(self.mmu_current_label)
+        mmu_current_layout.addStretch()
+        mmu_frame_layout.addLayout(mmu_current_layout)
+        
+        # Filament loaded status
+        self.mmu_loaded_label = QLabel("● Filament: --")
+        self.mmu_loaded_label.setFont(QFont("Play", 9))
+        mmu_frame_layout.addWidget(self.mmu_loaded_label)
+        
+        mmu_layout.addWidget(self.mmu_frame)
+        
+        layout.addWidget(self.mmu_section)
+        self.mmu_section.setVisible(False)  # Hidden by default
         
         # Separator
         line4 = QFrame()
@@ -1651,6 +1777,13 @@ class StatsPanel(QFrame):
         self.download_log_btn.setEnabled(False)
         log_layout.addWidget(self.download_log_btn)
         
+        # Credit for Klipper Log Visualizer
+        log_credit = QLabel("Powered by <a href='https://sineos.github.io/' style='color: #0ABAB5;'>Klipper Log Visualizer</a> by sineos")
+        log_credit.setFont(QFont("Play", 8))
+        log_credit.setStyleSheet(f"color: {COLORS['text_muted']};")
+        log_credit.setOpenExternalLinks(True)
+        log_layout.addWidget(log_credit)
+        
         layout.addWidget(log_frame)
         
         # Store temperature history for PID warning
@@ -1764,6 +1897,32 @@ class StatsPanel(QFrame):
             
             percent = (info.disk_used / info.disk_total) * 100
             self.disk_bar.setValue(int(percent))
+        
+        # Update MMU info
+        self.update_mmu_info(info)
+    
+    def update_mmu_info(self, info: SystemInfo):
+        """Update Multi-Color Unit display"""
+        if info.mmu_enabled:
+            self.mmu_section.setVisible(True)
+            self.mmu_type_label.setText(info.mmu_type)
+            self.mmu_gate_label.setText(f"{info.mmu_gate_count} gates")
+            
+            if info.mmu_current_gate >= 0:
+                self.mmu_current_label.setText(f"Gate {info.mmu_current_gate}")
+                self.mmu_current_label.setStyleSheet(f"color: {COLORS['success']};")
+            else:
+                self.mmu_current_label.setText("None")
+                self.mmu_current_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+            
+            if info.mmu_filament_loaded:
+                self.mmu_loaded_label.setText("● Filament: Loaded")
+                self.mmu_loaded_label.setStyleSheet(f"color: {COLORS['success']};")
+            else:
+                self.mmu_loaded_label.setText("○ Filament: Not loaded")
+                self.mmu_loaded_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        else:
+            self.mmu_section.setVisible(False)
     
     def _run_pid_calibrate(self, heater: str):
         """Run PID calibration for specified heater"""
@@ -1904,6 +2063,12 @@ class StatsPanel(QFrame):
         self.firmware_restart_btn.setEnabled(False)
         self.restart_btn.setEnabled(False)
         self.emergency_stop_btn.setEnabled(False)
+        # Clear MMU section
+        self.mmu_section.setVisible(False)
+        self.mmu_type_label.setText("--")
+        self.mmu_gate_label.setText("--")
+        self.mmu_current_label.setText("--")
+        self.mmu_loaded_label.setText("● Filament: --")
     
     def enable_controls(self, enabled: bool = True):
         """Enable or disable printer control buttons"""
@@ -2345,6 +2510,21 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(scan_group)
         
+        # Privacy mode setting
+        privacy_group = QGroupBox("Privacy")
+        privacy_layout = QVBoxLayout(privacy_group)
+        
+        self.privacy_mode_check = QCheckBox("Privacy Mode (hide IP addresses and hostnames)")
+        self.privacy_mode_check.setChecked(self.config_manager.get_setting('privacy_mode', False))
+        privacy_layout.addWidget(self.privacy_mode_check)
+        
+        privacy_desc = QLabel("When enabled, IP addresses and hostnames will be shown as '***' for screenshots")
+        privacy_desc.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        privacy_desc.setWordWrap(True)
+        privacy_layout.addWidget(privacy_desc)
+        
+        layout.addWidget(privacy_group)
+        
         layout.addStretch()
         
         # Buttons
@@ -2458,6 +2638,7 @@ Categories=Utility;
         """Save settings and close dialog"""
         self.config_manager.set_setting('log_folder', self.log_path_edit.text())
         self.config_manager.set_setting('auto_scan', self.auto_scan_check.isChecked())
+        self.config_manager.set_setting('privacy_mode', self.privacy_mode_check.isChecked())
         self.accept()
 
 
@@ -2631,11 +2812,38 @@ class MainWindow(QMainWindow):
         
         splitter.addWidget(left_widget)
         
-        # Right side - Stats panel
+        # Right side - Stats panel in scroll area
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        right_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background-color: {COLORS['bg_dark']};
+                width: 8px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {COLORS['border']};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
+        
         self.stats_panel = StatsPanel()
         self.stats_panel.setMinimumWidth(350)
         self.stats_panel.setMaximumWidth(400)
-        splitter.addWidget(self.stats_panel)
+        right_scroll.setWidget(self.stats_panel)
+        right_scroll.setMinimumWidth(370)
+        right_scroll.setMaximumWidth(420)
+        splitter.addWidget(right_scroll)
         
         splitter.setSizes([900, 350])
         
@@ -2717,7 +2925,11 @@ class MainWindow(QMainWindow):
     def _show_settings_dialog(self):
         """Show settings dialog"""
         dialog = SettingsDialog(self.config_manager, self)
-        dialog.exec()
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Update privacy mode on all cards
+            privacy_mode = self.config_manager.get_setting('privacy_mode', False)
+            for card in self.printer_cards.values():
+                card.update_privacy_mode(privacy_mode)
     
     def _on_camera_clicked(self, webcam_url: str):
         self.stats_panel.set_webcam_url(webcam_url)
