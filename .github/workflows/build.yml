@@ -90,7 +90,6 @@ jobs:
   release:
     needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
@@ -115,9 +114,10 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v1.0.0-${{ github.run_number }}
+          name: KlipperBuddy Build ${{ github.run_number }}
           files: |
             windows/KlipperBuddy.exe
             linux/KlipperBuddy
             macos/KlipperBuddy
           generate_release_notes: true
-
