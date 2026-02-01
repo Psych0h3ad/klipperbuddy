@@ -292,6 +292,7 @@ class PrinterConfig:
     username: str = ""
     password: str = ""
     enabled: bool = True
+    camera_enabled: bool = True  # Enable camera preview on card
 
 
 # =============================================================================
@@ -577,18 +578,6 @@ class MoonrakerClient:
                 cpu_info = system_info.get('cpu_info', {})
                 model = cpu_info.get('model', '')
                 if 'snapmaker' in model.lower():
-                    return 'Snapmaker U1'
-        except:
-            pass
-        
-        # Try to detect Snapmaker by checking for multiple extruders (4 toolheads)
-        try:
-            resp = await self._request('GET', '/printer/objects/list')
-            if resp and 'result' in resp:
-                objects = resp['result'].get('objects', [])
-                extruder_count = len([obj for obj in objects if obj.startswith('extruder') and 'stepper' not in obj])
-                # Snapmaker U1 has 4 extruders
-                if extruder_count == 4:
                     return 'Snapmaker U1'
         except:
             pass
@@ -1234,10 +1223,13 @@ class PrinterCard(QFrame):
         """Setup timer for camera preview updates"""
         self._camera_timer = QTimer(self)
         self._camera_timer.timeout.connect(self._update_camera_preview)
-        self._camera_timer.start(2000)  # Update every 2 seconds
+        self._camera_timer.start(5000)  # Update every 5 seconds (reduced for performance)
     
     def _update_camera_preview(self):
         """Fetch and update camera preview image"""
+        # Check if camera is disabled for this printer
+        if not self.config.camera_enabled:
+            return
         if not self._camera_url or not self.camera_preview:
             return
         
@@ -1510,6 +1502,8 @@ class PrinterCard(QFrame):
             }}
         """)
         self.camera_btn.clicked.connect(self._on_camera_click)
+        self.camera_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.camera_btn.customContextMenuRequested.connect(self._show_camera_menu)
         btn_layout.addWidget(self.camera_btn)
         
         # Graph button
@@ -1638,6 +1632,40 @@ class PrinterCard(QFrame):
             # Try to open default webcam URL
             url = f"http://{self.config.host}/webcam/?action=stream"
             self.camera_clicked.emit(url)
+    
+    def toggle_camera(self):
+        """Toggle camera preview on/off for this printer"""
+        self.config.camera_enabled = not self.config.camera_enabled
+        if self.camera_preview:
+            if self.config.camera_enabled:
+                self.camera_preview.setText("Loading...")
+                self._update_camera_preview()
+            else:
+                self.camera_preview.setText("Camera Off")
+                self.camera_preview.setPixmap(QPixmap())
+    
+    def _show_camera_menu(self, pos):
+        """Show context menu for camera button"""
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['accent']};
+            }}
+            QMenu::item:selected {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
+        
+        if self.config.camera_enabled:
+            action = menu.addAction("🚫 Disable Camera Preview")
+        else:
+            action = menu.addAction("📷 Enable Camera Preview")
+        
+        action.triggered.connect(self.toggle_camera)
+        menu.exec(self.camera_btn.mapToGlobal(pos))
     
     def _on_graph_click(self):
         self.card_clicked.emit(self)
@@ -3407,9 +3435,9 @@ class MainWindow(QMainWindow):
         # Connect G-code request handler
         self.stats_panel.gcode_requested = self._send_gcode
         
-        # Auto-refresh timer
+        # Auto-refresh timer (lightweight updates only)
         self.refresh_timer = QTimer()
-        self.refresh_timer.timeout.connect(self._refresh_all_status)
+        self.refresh_timer.timeout.connect(lambda: self._refresh_all_status(full_refresh=False))
         self.refresh_timer.start(3000)  # Refresh every 3 seconds
     
     def showEvent(self, event):
@@ -3681,11 +3709,13 @@ class MainWindow(QMainWindow):
             default_url = f"http://{card.config.host}/webcam/?action=stream"
             self.stats_panel.set_webcam_url(default_url)
     
-    def _refresh_all_status(self):
+    def _refresh_all_status(self, full_refresh: bool = True):
+        """Refresh all printers. full_refresh=True on startup/manual refresh."""
         for key, card in self.printer_cards.items():
-            self._refresh_printer_status(card)
+            self._refresh_printer_status(card, full_refresh=full_refresh)
     
-    def _refresh_printer_status(self, card: PrinterCard):
+    def _refresh_printer_status(self, card: PrinterCard, full_refresh: bool = False):
+        """Refresh printer status. full_refresh=True fetches all info including name/system info."""
         config = card.config
         
         async def fetch():
@@ -3694,18 +3724,26 @@ class MainWindow(QMainWindow):
                 config.api_key, config.username, config.password
             )
             try:
+                # Always fetch status and stats (lightweight)
                 status = await client.get_status()
                 stats = await client.get_print_stats()
-                system_info = await client.get_system_info()
-                shaper_data = await client.get_input_shaper_data()
                 
-                # Also try to get better name if not set
-                if not config.name or config.name == config.host:
-                    name = await client.get_printer_name()
-                    if name and name != config.host:
-                        config.name = name
+                # Only fetch heavy info on full refresh (startup or manual refresh)
+                system_info = None
+                shaper_data = None
+                name = config.name
                 
-                return status, stats, system_info, shaper_data, config.name
+                if full_refresh:
+                    system_info = await client.get_system_info()
+                    shaper_data = await client.get_input_shaper_data()
+                    
+                    # Try to get better name if not set
+                    if not config.name or config.name == config.host:
+                        name = await client.get_printer_name()
+                        if name and name != config.host:
+                            config.name = name
+                
+                return status, stats, system_info, shaper_data, name, full_refresh
             finally:
                 await client.close()
         
@@ -3716,11 +3754,14 @@ class MainWindow(QMainWindow):
     
     def _on_status_received(self, card: PrinterCard, result):
         if result:
-            status, stats, system_info, shaper_data, name = result
+            status, stats, system_info, shaper_data, name, full_refresh = result
             card.update_status(status)
             card.update_stats(stats)
-            card.update_system_info(system_info)
-            if name:
+            
+            # Only update heavy info on full refresh
+            if full_refresh and system_info:
+                card.update_system_info(system_info)
+            if full_refresh and name:
                 card.set_name(name)
             
             # Update stats panel if this is the selected printer
@@ -3731,8 +3772,10 @@ class MainWindow(QMainWindow):
                     status.chamber_temp
                 )
                 self.stats_panel.update_stats(stats)
-                self.stats_panel.update_system_info(system_info)
-                self.stats_panel.update_input_shaper(shaper_data)
+                if full_refresh and system_info:
+                    self.stats_panel.update_system_info(system_info)
+                if full_refresh and shaper_data:
+                    self.stats_panel.update_input_shaper(shaper_data)
                 self.stats_panel.set_printer_config(card.config)
                 
                 # Check for PID warning
