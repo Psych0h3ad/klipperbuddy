@@ -51,6 +51,14 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 
+def get_icon(name: str, size: int = 16) -> QIcon:
+    """Load an SVG icon from the icons directory"""
+    icon_path = resource_path(f"icons/{name}.svg")
+    if os.path.exists(icon_path):
+        return QIcon(icon_path)
+    return QIcon()
+
+
 # =============================================================================
 # Color Scheme - Cyberpunk with Tiffany Blue
 # =============================================================================
@@ -491,7 +499,7 @@ class MoonrakerClient:
                 value = resp['result'].get('value', {})
                 if isinstance(value, dict):
                     name = value.get('general', {}).get('instanceName')
-                    if name and name.strip():
+                    if name and name.strip() and not self._is_generic_name(name.strip()):
                         return name.strip()
         except:
             pass
@@ -503,7 +511,7 @@ class MoonrakerClient:
                 value = resp['result'].get('value', {})
                 if isinstance(value, dict):
                     name = value.get('instanceName')
-                    if name and name.strip():
+                    if name and name.strip() and not self._is_generic_name(name.strip()):
                         return name.strip()
         except:
             pass
@@ -517,19 +525,23 @@ class MoonrakerClient:
                 machine = config.get('machine', {})
                 if machine:
                     name = machine.get('name')
-                    if name and name.strip():
+                    if name and name.strip() and not self._is_generic_name(name.strip()):
                         return name.strip()
         except:
             pass
         
-        # Try printer.cfg [printer] section for custom name
+        # Try to get machine info from Moonraker
         try:
-            resp = await self._request('GET', '/printer/objects/query?configfile')
+            resp = await self._request('GET', '/machine/system_info')
             if resp and 'result' in resp:
-                config = resp['result'].get('status', {}).get('configfile', {}).get('settings', {})
-                # Check for custom printer name in metadata
-                printer_cfg = config.get('printer', {})
-                # Some setups store name in virtual_sdcard or other sections
+                system_info = resp['result'].get('system_info', {})
+                # Try to get model from distribution info
+                dist_info = system_info.get('distribution', {})
+                dist_id = dist_info.get('id', '')
+                # QIDI printers often have specific identifiers
+                if 'qidi' in dist_id.lower():
+                    # Try to extract model from hostname or other sources
+                    pass
         except:
             pass
         
@@ -537,10 +549,27 @@ class MoonrakerClient:
         info = await self.get_printer_info()
         if info and 'result' in info:
             hostname = info['result'].get('hostname', '')
-            if hostname and hostname.strip():
+            if hostname and hostname.strip() and not self._is_generic_name(hostname.strip()):
                 return hostname.strip()
         
         return self.host
+    
+    def _is_generic_name(self, name: str) -> bool:
+        """Check if name is a generic/default name that should be skipped"""
+        generic_names = [
+            'klipper', 'printer', 'mainsail', 'fluidd', 'localhost',
+            'raspberry', 'raspberrypi', 'pi', 'mks', 'btt', 'lava',
+            'sonic', 'pad', 'host'
+        ]
+        name_lower = name.lower()
+        # Skip if it's just an IP address
+        if name_lower.replace('.', '').isdigit():
+            return True
+        # Skip generic names
+        for generic in generic_names:
+            if name_lower == generic or name_lower.startswith(generic + '-'):
+                return True
+        return False
     
     async def get_status(self) -> PrinterStatus:
         status = PrinterStatus()
@@ -1350,10 +1379,17 @@ class StatsPanel(QFrame):
         layout.addWidget(self.printer_name_label)
         
         # Temperature Graph
-        graph_label = QLabel("📈 TEMPERATURE GRAPH")
+        graph_header = QHBoxLayout()
+        graph_header.setSpacing(6)
+        graph_icon = QLabel()
+        graph_icon.setPixmap(get_icon("temperature").pixmap(16, 16))
+        graph_header.addWidget(graph_icon)
+        graph_label = QLabel("TEMPERATURE GRAPH")
         graph_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
         graph_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        layout.addWidget(graph_label)
+        graph_header.addWidget(graph_label)
+        graph_header.addStretch()
+        layout.addLayout(graph_header)
         
         self.temp_chart = TemperatureChart()
         self.temp_chart.setMinimumHeight(80)
@@ -1387,10 +1423,17 @@ class StatsPanel(QFrame):
         layout.addWidget(line1)
         
         # Camera Preview section
-        cam_label = QLabel("📷 CAMERA PREVIEW")
+        cam_header = QHBoxLayout()
+        cam_header.setSpacing(6)
+        cam_icon = QLabel()
+        cam_icon.setPixmap(get_icon("camera").pixmap(16, 16))
+        cam_header.addWidget(cam_icon)
+        cam_label = QLabel("CAMERA PREVIEW")
         cam_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
         cam_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        layout.addWidget(cam_label)
+        cam_header.addWidget(cam_label)
+        cam_header.addStretch()
+        layout.addLayout(cam_header)
         
         self.camera_frame = QFrame()
         self.camera_frame.setFixedHeight(80)
@@ -1434,10 +1477,17 @@ class StatsPanel(QFrame):
         layout.addWidget(line2)
         
         # Statistics section
-        stats_label = QLabel("📊 STATISTICS")
+        stats_header = QHBoxLayout()
+        stats_header.setSpacing(6)
+        stats_icon = QLabel()
+        stats_icon.setPixmap(get_icon("stats").pixmap(16, 16))
+        stats_header.addWidget(stats_icon)
+        stats_label = QLabel("STATISTICS")
         stats_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         stats_label.setStyleSheet(f"color: {COLORS['accent']};")
-        layout.addWidget(stats_label)
+        stats_header.addWidget(stats_label)
+        stats_header.addStretch()
+        layout.addLayout(stats_header)
         
         stats_grid = QGridLayout()
         stats_grid.setSpacing(2)
@@ -1479,10 +1529,17 @@ class StatsPanel(QFrame):
         layout.addWidget(line3)
         
         # System Info section
-        sys_label = QLabel("💻 SYSTEM INFO")
+        sys_header = QHBoxLayout()
+        sys_header.setSpacing(6)
+        sys_icon = QLabel()
+        sys_icon.setPixmap(get_icon("system").pixmap(16, 16))
+        sys_header.addWidget(sys_icon)
+        sys_label = QLabel("SYSTEM INFO")
         sys_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         sys_label.setStyleSheet(f"color: {COLORS['accent']};")
-        layout.addWidget(sys_label)
+        sys_header.addWidget(sys_label)
+        sys_header.addStretch()
+        layout.addLayout(sys_header)
         
         sys_grid = QGridLayout()
         sys_grid.setSpacing(2)
@@ -1594,10 +1651,17 @@ class StatsPanel(QFrame):
         layout.addWidget(line4)
         
         # Tuning Advisor section
-        tuning_label = QLabel("🔧 TUNING ADVISOR")
+        tuning_header = QHBoxLayout()
+        tuning_header.setSpacing(6)
+        tuning_icon = QLabel()
+        tuning_icon.setPixmap(get_icon("tuning").pixmap(16, 16))
+        tuning_header.addWidget(tuning_icon)
+        tuning_label = QLabel("TUNING ADVISOR")
         tuning_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         tuning_label.setStyleSheet(f"color: {COLORS['accent']};")
-        layout.addWidget(tuning_label)
+        tuning_header.addWidget(tuning_label)
+        tuning_header.addStretch()
+        layout.addLayout(tuning_header)
         
         # PID Warning
         self.pid_warning_frame = QFrame()
@@ -1677,104 +1741,24 @@ class StatsPanel(QFrame):
         
         layout.addWidget(self.shaper_frame)
         
-        # Separator
+        # Separator before Log Analyzer
         line5 = QFrame()
         line5.setFrameShape(QFrame.Shape.HLine)
         line5.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
         layout.addWidget(line5)
         
-        # Printer Control section
-        control_label = QLabel("🎮 PRINTER CONTROL")
-        control_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
-        control_label.setStyleSheet(f"color: {COLORS['accent']};")
-        layout.addWidget(control_label)
-        
-        control_frame = QFrame()
-        control_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_dark']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-        """)
-        control_layout = QVBoxLayout(control_frame)
-        control_layout.setContentsMargins(4, 4, 4, 4)
-        control_layout.setSpacing(2)
-        
-        # Firmware Restart button
-        self.firmware_restart_btn = QPushButton("🔄 FIRMWARE_RESTART")
-        self.firmware_restart_btn.setFixedHeight(22)
-        self.firmware_restart_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['warning']};
-                border: 1px solid {COLORS['warning']};
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['warning']};
-                color: {COLORS['bg_dark']};
-            }}
-        """)
-        self.firmware_restart_btn.clicked.connect(self._firmware_restart)
-        self.firmware_restart_btn.setEnabled(False)
-        control_layout.addWidget(self.firmware_restart_btn)
-        
-        # Restart button
-        self.restart_btn = QPushButton("🔁 RESTART")
-        self.restart_btn.setFixedHeight(22)
-        self.restart_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['accent']};
-                border: 1px solid {COLORS['accent']};
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['accent']};
-                color: {COLORS['bg_dark']};
-            }}
-        """)
-        self.restart_btn.clicked.connect(self._restart_klipper)
-        self.restart_btn.setEnabled(False)
-        control_layout.addWidget(self.restart_btn)
-        
-        # Emergency Stop button
-        self.emergency_stop_btn = QPushButton("🛑 EMERGENCY STOP")
-        self.emergency_stop_btn.setFixedHeight(24)
-        self.emergency_stop_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['error']};
-                color: {COLORS['text_primary']};
-                border: 2px solid {COLORS['error']};
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: #ff0000;
-                border-color: #ff0000;
-            }}
-        """)
-        self.emergency_stop_btn.clicked.connect(self._emergency_stop)
-        self.emergency_stop_btn.setEnabled(False)
-        control_layout.addWidget(self.emergency_stop_btn)
-        
-        layout.addWidget(control_frame)
-        
-        # Separator
-        line6 = QFrame()
-        line6.setFrameShape(QFrame.Shape.HLine)
-        line6.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line6)
-        
         # Log Analyzer section
-        log_label = QLabel("📊 LOG ANALYZER")
+        log_header = QHBoxLayout()
+        log_header.setSpacing(6)
+        log_icon = QLabel()
+        log_icon.setPixmap(get_icon("log").pixmap(16, 16))
+        log_header.addWidget(log_icon)
+        log_label = QLabel("LOG ANALYZER")
         log_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         log_label.setStyleSheet(f"color: {COLORS['accent']};")
-        layout.addWidget(log_label)
+        log_header.addWidget(log_label)
+        log_header.addStretch()
+        layout.addLayout(log_header)
         
         log_frame = QFrame()
         log_frame.setStyleSheet(f"""
