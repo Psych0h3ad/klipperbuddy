@@ -484,27 +484,52 @@ class MoonrakerClient:
     
     async def get_printer_name(self) -> str:
         """Get the best available printer name"""
-        # Try Fluidd config first
+        # Try Fluidd config first (instanceName)
         try:
             resp = await self._request('GET', '/server/database/item?namespace=fluidd&key=uiSettings')
             if resp and 'result' in resp:
                 value = resp['result'].get('value', {})
                 if isinstance(value, dict):
                     name = value.get('general', {}).get('instanceName')
-                    if name:
-                        return name
+                    if name and name.strip():
+                        return name.strip()
         except:
             pass
         
-        # Try Mainsail config
+        # Try Mainsail config (instanceName)
         try:
             resp = await self._request('GET', '/server/database/item?namespace=mainsail&key=general')
             if resp and 'result' in resp:
                 value = resp['result'].get('value', {})
                 if isinstance(value, dict):
                     name = value.get('instanceName')
-                    if name:
-                        return name
+                    if name and name.strip():
+                        return name.strip()
+        except:
+            pass
+        
+        # Try Moonraker config (machine name from [machine] section)
+        try:
+            resp = await self._request('GET', '/server/config')
+            if resp and 'result' in resp:
+                config = resp['result'].get('config', {})
+                # Check for machine name in moonraker config
+                machine = config.get('machine', {})
+                if machine:
+                    name = machine.get('name')
+                    if name and name.strip():
+                        return name.strip()
+        except:
+            pass
+        
+        # Try printer.cfg [printer] section for custom name
+        try:
+            resp = await self._request('GET', '/printer/objects/query?configfile')
+            if resp and 'result' in resp:
+                config = resp['result'].get('status', {}).get('configfile', {}).get('settings', {})
+                # Check for custom printer name in metadata
+                printer_cfg = config.get('printer', {})
+                # Some setups store name in virtual_sdcard or other sections
         except:
             pass
         
@@ -512,8 +537,8 @@ class MoonrakerClient:
         info = await self.get_printer_info()
         if info and 'result' in info:
             hostname = info['result'].get('hostname', '')
-            if hostname:
-                return hostname
+            if hostname and hostname.strip():
+                return hostname.strip()
         
         return self.host
     
