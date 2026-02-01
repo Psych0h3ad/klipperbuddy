@@ -1039,7 +1039,7 @@ class TemperatureChart(QWidget):
         
         # Chart area
         margin = 40
-        chart_rect = QRect(margin, 10, self.width() - margin - 10, self.height() - 30)
+        chart_rect = QRect(margin, 15, self.width() - margin - 10, self.height() - 35)
         
         # Draw grid
         painter.setPen(QPen(QColor(COLORS['border']), 1))
