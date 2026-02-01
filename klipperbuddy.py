@@ -270,12 +270,14 @@ class SystemInfo:
     disk_free: int = 0  # bytes
     cpu_temp: float = 0.0
     webcam_url: str = ""
-    # Multi-color unit info (MMU/ERCF/AFC)
-    mmu_type: str = ""  # "MMU", "ERCF", "AFC", "Tradrack", etc.
+    # Multi-color unit info (MMU/ERCF/AFC/QIDI BOX)
+    mmu_type: str = ""  # "MMU", "ERCF", "AFC", "Tradrack", "QIDI BOX", etc.
     mmu_enabled: bool = False
     mmu_gate_count: int = 0
     mmu_current_gate: int = -1
     mmu_filament_loaded: bool = False
+    # QIDI BOX heater temperatures (list of temps for each channel)
+    mmu_heater_temps: list = None  # [(current, target), ...]
 
 
 @dataclass
@@ -706,7 +708,7 @@ class MoonrakerClient:
         except:
             pass
         
-        # Check for Multi-Color Units (MMU/ERCF/AFC/Tradrack)
+        # Check for Multi-Color Units (MMU/ERCF/AFC/Tradrack/QIDI BOX)
         try:
             # Query for various MMU systems
             resp = await self._request('GET', 
@@ -750,6 +752,35 @@ class MoonrakerClient:
                     info.mmu_current_gate = tradrack.get('current_lane', -1)
         except:
             pass
+        
+        # Check for QIDI BOX (multi-color dryer unit with heaters)
+        if not info.mmu_enabled:
+            try:
+                # QIDI BOX uses heater_generic for each channel
+                resp = await self._request('GET', '/printer/objects/list')
+                if resp and 'result' in resp:
+                    objects = resp['result'].get('objects', [])
+                    # Look for QIDI BOX heaters (heater_generic box_heater_* or similar)
+                    box_heaters = [obj for obj in objects if 'box' in obj.lower() and 'heater' in obj.lower()]
+                    if box_heaters:
+                        info.mmu_enabled = True
+                        info.mmu_type = "QIDI BOX"
+                        info.mmu_gate_count = len(box_heaters)
+                        
+                        # Get heater temperatures
+                        heater_query = '&'.join([h.replace(' ', '%20') for h in box_heaters])
+                        temp_resp = await self._request('GET', f'/printer/objects/query?{heater_query}')
+                        if temp_resp and 'result' in temp_resp:
+                            temps = []
+                            status = temp_resp['result'].get('status', {})
+                            for heater in box_heaters:
+                                heater_data = status.get(heater, {})
+                                current = heater_data.get('temperature', 0)
+                                target = heater_data.get('target', 0)
+                                temps.append((current, target))
+                            info.mmu_heater_temps = temps
+            except:
+                pass
         
         return info
     
@@ -1950,7 +1981,12 @@ class StatsPanel(QFrame):
         if info.mmu_enabled:
             self.mmu_section.setVisible(True)
             self.mmu_type_label.setText(info.mmu_type)
-            self.mmu_gate_label.setText(f"{info.mmu_gate_count} gates")
+            
+            # For QIDI BOX, show channels instead of gates
+            if info.mmu_type == "QIDI BOX":
+                self.mmu_gate_label.setText(f"{info.mmu_gate_count} channels")
+            else:
+                self.mmu_gate_label.setText(f"{info.mmu_gate_count} gates")
             
             if info.mmu_current_gate >= 0:
                 self.mmu_current_label.setText(f"Gate {info.mmu_current_gate}")
@@ -1959,7 +1995,17 @@ class StatsPanel(QFrame):
                 self.mmu_current_label.setText("None")
                 self.mmu_current_label.setStyleSheet(f"color: {COLORS['text_muted']};")
             
-            if info.mmu_filament_loaded:
+            # For QIDI BOX, show heater temperatures instead of filament loaded status
+            if info.mmu_type == "QIDI BOX" and info.mmu_heater_temps:
+                temp_strs = []
+                for i, (current, target) in enumerate(info.mmu_heater_temps):
+                    if target > 0:
+                        temp_strs.append(f"CH{i+1}: {current:.0f}°C/{target:.0f}°C")
+                    else:
+                        temp_strs.append(f"CH{i+1}: {current:.0f}°C")
+                self.mmu_loaded_label.setText(" | ".join(temp_strs))
+                self.mmu_loaded_label.setStyleSheet(f"color: {COLORS['accent']};")
+            elif info.mmu_filament_loaded:
                 self.mmu_loaded_label.setText("● Filament: Loaded")
                 self.mmu_loaded_label.setStyleSheet(f"color: {COLORS['success']};")
             else:
