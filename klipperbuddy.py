@@ -3421,10 +3421,16 @@ Categories=Utility;
     
     def _save_and_close(self):
         """Save settings and close dialog"""
+        old_compact_mode = self.config_manager.get_setting('compact_mode', False)
+        new_compact_mode = self.compact_mode_check.isChecked()
+        
         self.config_manager.set_setting('log_folder', self.log_path_edit.text())
         self.config_manager.set_setting('auto_scan', self.auto_scan_check.isChecked())
-        self.config_manager.set_setting('compact_mode', self.compact_mode_check.isChecked())
+        self.config_manager.set_setting('compact_mode', new_compact_mode)
         self.config_manager.set_setting('privacy_mode', self.privacy_mode_check.isChecked())
+        
+        # Store whether compact mode changed
+        self.compact_mode_changed = (old_compact_mode != new_compact_mode)
         self.accept()
 
 
@@ -3669,6 +3675,34 @@ class MainWindow(QMainWindow):
             col = i % cols
             self.cards_layout.addWidget(card, row, col)
     
+    def _recreate_all_cards(self):
+        """Recreate all printer cards (used when compact mode changes)"""
+        # Store current configs and states
+        configs = [card.config for card in self.printer_cards.values()]
+        selected_key = None
+        if self.selected_printer:
+            selected_key = f"{self.selected_printer.config.host}:{self.selected_printer.config.port}"
+        
+        # Remove all existing cards
+        for key in list(self.printer_cards.keys()):
+            card = self.printer_cards.pop(key)
+            self.cards_layout.removeWidget(card)
+            card.deleteLater()
+        
+        # Clear selection
+        self.selected_printer = None
+        
+        # Recreate cards with new compact_mode setting
+        for config in configs:
+            self._add_printer_card(config)
+        
+        # Restore selection if possible
+        if selected_key and selected_key in self.printer_cards:
+            self._on_card_clicked(self.printer_cards[selected_key])
+        
+        # Refresh all status
+        self._refresh_all_status()
+    
     def _show_scan_dialog(self):
         dialog = ScanDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -3697,11 +3731,16 @@ class MainWindow(QMainWindow):
     def _show_settings_dialog(self):
         """Show settings dialog"""
         dialog = SettingsDialog(self.config_manager, self)
+        dialog.compact_mode_changed = False  # Initialize flag
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Update privacy mode on all cards
             privacy_mode = self.config_manager.get_setting('privacy_mode', False)
             for card in self.printer_cards.values():
                 card.update_privacy_mode(privacy_mode)
+            
+            # Recreate all cards if compact mode changed
+            if dialog.compact_mode_changed:
+                self._recreate_all_cards()
     
     def _on_camera_clicked(self, webcam_url: str):
         self.stats_panel.set_webcam_url(webcam_url)
