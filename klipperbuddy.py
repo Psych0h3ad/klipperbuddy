@@ -1297,7 +1297,7 @@ class PrinterCard(QFrame):
 # =============================================================================
 
 class StatsPanel(QFrame):
-    """Statistics and system info panel"""
+    """Statistics and system info panel with internal scrolling"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1305,7 +1305,39 @@ class StatsPanel(QFrame):
         self._apply_style()
     
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        # Main layout for the frame
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Create scroll area inside the panel
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background-color: {COLORS['bg_dark']};
+                width: 8px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {COLORS['border']};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
+        
+        # Content widget inside scroll area
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         
@@ -1811,6 +1843,10 @@ class StatsPanel(QFrame):
         
         layout.addWidget(log_frame)
         
+        # Set content widget to scroll area and add to main layout
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+        
         # Store temperature history for PID warning
         self._temp_history_hotend: deque = deque(maxlen=30)
         self._temp_history_bed: deque = deque(maxlen=30)
@@ -1827,8 +1863,6 @@ class StatsPanel(QFrame):
                 border-radius: 8px;
             }}
         """)
-        # Set size policy to allow proper scrolling
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
     
     def _open_camera(self):
         if self.current_webcam_url:
@@ -2837,38 +2871,11 @@ class MainWindow(QMainWindow):
         
         splitter.addWidget(left_widget)
         
-        # Right side - Stats panel in scroll area
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        right_scroll.setStyleSheet(f"""
-            QScrollArea {{
-                background-color: transparent;
-                border: none;
-            }}
-            QScrollBar:vertical {{
-                background-color: {COLORS['bg_dark']};
-                width: 8px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background-color: {COLORS['border']};
-                border-radius: 4px;
-                min-height: 20px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background-color: {COLORS['accent']};
-            }}
-        """)
-        
+        # Right side - Stats panel (has internal scrolling)
         self.stats_panel = StatsPanel()
-        self.stats_panel.setMinimumWidth(350)
-        self.stats_panel.setMaximumWidth(400)
-        right_scroll.setWidget(self.stats_panel)
-        right_scroll.setMinimumWidth(370)
-        right_scroll.setMaximumWidth(420)
-        splitter.addWidget(right_scroll)
+        self.stats_panel.setMinimumWidth(370)
+        self.stats_panel.setMaximumWidth(420)
+        splitter.addWidget(self.stats_panel)
         
         splitter.setSizes([900, 350])
         
