@@ -810,15 +810,86 @@ class MoonrakerClient:
                 shaper = data.get('input_shaper', {})
                 config = data.get('configfile', {}).get('settings', {})
                 
-                return {
+                result = {
                     'shaper_type_x': shaper.get('shaper_type_x', ''),
                     'shaper_freq_x': shaper.get('shaper_freq_x', 0),
                     'shaper_type_y': shaper.get('shaper_type_y', ''),
                     'shaper_freq_y': shaper.get('shaper_freq_y', 0),
                     'damping_ratio_x': shaper.get('damping_ratio_x', 0.1),
                     'damping_ratio_y': shaper.get('damping_ratio_y', 0.1),
-                    'config': config.get('input_shaper', {})
+                    'config': config.get('input_shaper', {}),
+                    'advice': [],
+                    'max_accel_x': 0,
+                    'max_accel_y': 0
                 }
+                
+                # Generate advice based on shaper data
+                freq_x = result['shaper_freq_x']
+                freq_y = result['shaper_freq_y']
+                shaper_type_x = result['shaper_type_x']
+                shaper_type_y = result['shaper_type_y']
+                
+                # Calculate recommended max acceleration based on shaper type and frequency
+                # Formula: max_accel = shaper_freq^2 * factor (factor depends on shaper type)
+                accel_factors = {
+                    'zv': 0.5, 'mzv': 0.4, 'zvd': 0.3, 'ei': 0.4,
+                    '2hump_ei': 0.3, '3hump_ei': 0.25, 'smooth_zv': 0.35,
+                    'smooth_mzv': 0.3, 'smooth_ei': 0.3
+                }
+                
+                if freq_x > 0 and shaper_type_x:
+                    factor = accel_factors.get(shaper_type_x.lower(), 0.4)
+                    result['max_accel_x'] = int(freq_x * freq_x * factor * 100)
+                
+                if freq_y > 0 and shaper_type_y:
+                    factor = accel_factors.get(shaper_type_y.lower(), 0.4)
+                    result['max_accel_y'] = int(freq_y * freq_y * factor * 100)
+                
+                # Generate advice
+                if freq_x > 0 and freq_x < 30:
+                    result['advice'].append("⚠️ X axis frequency is low (<30Hz). Check frame rigidity and belt tension.")
+                if freq_y > 0 and freq_y < 30:
+                    result['advice'].append("⚠️ Y axis frequency is low (<30Hz). Check frame rigidity and belt tension.")
+                
+                if freq_x > 0 and freq_y > 0:
+                    diff = abs(freq_x - freq_y)
+                    if diff > 20:
+                        result['advice'].append(f"ℹ️ Large frequency difference between axes ({diff:.1f}Hz). This is normal for CoreXY/bed-slinger.")
+                
+                if shaper_type_x and shaper_type_x.lower() in ['3hump_ei', 'smooth_ei']:
+                    result['advice'].append("ℹ️ X axis uses aggressive smoothing. Consider checking for mechanical issues.")
+                if shaper_type_y and shaper_type_y.lower() in ['3hump_ei', 'smooth_ei']:
+                    result['advice'].append("ℹ️ Y axis uses aggressive smoothing. Consider checking for mechanical issues.")
+                
+                return result
+        except:
+            pass
+        return None
+    
+    async def get_shaper_graph_files(self) -> List[str]:
+        """Get list of Input Shaper calibration graph files"""
+        try:
+            # Check for resonance test results in /tmp
+            resp = await self._request('GET', '/server/files/list?root=config')
+            if resp and 'result' in resp:
+                files = resp['result']
+                # Look for shaper calibration PNG files
+                shaper_files = [f['path'] for f in files 
+                               if f['path'].endswith('.png') and 
+                               ('shaper' in f['path'].lower() or 'resonance' in f['path'].lower())]
+                return shaper_files
+        except:
+            pass
+        return []
+    
+    async def download_shaper_graph(self, filename: str) -> Optional[bytes]:
+        """Download a shaper calibration graph file"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.base_url}/server/files/config/{filename}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
         except:
             pass
         return None
@@ -1762,13 +1833,47 @@ class StatsPanel(QFrame):
         self.shaper_y_label.setStyleSheet(f"color: {COLORS['accent']};")
         shaper_grid.addWidget(self.shaper_y_label, 1, 1)
         
+        # Max acceleration recommendations
+        shaper_grid.addWidget(QLabel("Max Accel X:"), 2, 0)
+        self.shaper_accel_x_label = QLabel("--")
+        self.shaper_accel_x_label.setFont(QFont("Play", 9))
+        self.shaper_accel_x_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        shaper_grid.addWidget(self.shaper_accel_x_label, 2, 1)
+        
+        shaper_grid.addWidget(QLabel("Max Accel Y:"), 3, 0)
+        self.shaper_accel_y_label = QLabel("--")
+        self.shaper_accel_y_label.setFont(QFont("Play", 9))
+        self.shaper_accel_y_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        shaper_grid.addWidget(self.shaper_accel_y_label, 3, 1)
+        
         shaper_layout.addLayout(shaper_grid)
+        
+        # Shaper advice label
+        self.shaper_advice_label = QLabel("")
+        self.shaper_advice_label.setFont(QFont("Play", 8))
+        self.shaper_advice_label.setWordWrap(True)
+        self.shaper_advice_label.setStyleSheet(f"color: {COLORS['warning']}; padding: 2px;")
+        self.shaper_advice_label.setVisible(False)
+        shaper_layout.addWidget(self.shaper_advice_label)
+        
+        # Buttons row
+        shaper_btn_layout = QHBoxLayout()
+        shaper_btn_layout.setSpacing(4)
         
         self.shaper_calibrate_btn = QPushButton("Run SHAPER_CALIBRATE")
         self.shaper_calibrate_btn.setFixedHeight(28)
         self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
         self.shaper_calibrate_btn.setEnabled(False)
-        shaper_layout.addWidget(self.shaper_calibrate_btn)
+        shaper_btn_layout.addWidget(self.shaper_calibrate_btn)
+        
+        self.save_shaper_graph_btn = QPushButton("Save Graph")
+        self.save_shaper_graph_btn.setFixedHeight(28)
+        self.save_shaper_graph_btn.clicked.connect(self._save_shaper_graph)
+        self.save_shaper_graph_btn.setEnabled(False)
+        self.save_shaper_graph_btn.setToolTip("Save Input Shaper calibration graph (requires Shake&Tune)")
+        shaper_btn_layout.addWidget(self.save_shaper_graph_btn)
+        
+        shaper_layout.addLayout(shaper_btn_layout)
         
         layout.addWidget(self.shaper_frame)
         
@@ -2066,6 +2171,64 @@ class StatsPanel(QFrame):
         if self._current_printer_config and self.gcode_requested:
             self.gcode_requested(self._current_printer_config, "SHAPER_CALIBRATE")
     
+    def _save_shaper_graph(self):
+        """Save Input Shaper calibration graph from Shake&Tune"""
+        if not self._current_printer_config:
+            return
+        
+        async def download_graphs():
+            try:
+                client = MoonrakerClient(self._current_printer_config['host'])
+                
+                # Try to find Shake&Tune results
+                files = await client.get_shaper_graph_files()
+                
+                if not files:
+                    # Check ShakeTune_results folder
+                    try:
+                        resp = await client._request('GET', '/server/files/list?root=config&path=ShakeTune_results')
+                        if resp and 'result' in resp:
+                            files = [f'ShakeTune_results/{f["path"]}' for f in resp['result'] 
+                                    if f['path'].endswith('.png')]
+                    except:
+                        pass
+                
+                if not files:
+                    QMessageBox.information(
+                        self, "No Graphs Found",
+                        "No Input Shaper calibration graphs found.\n\n"
+                        "To generate graphs, install Shake&Tune:\n"
+                        "https://github.com/Frix-x/klippain-shaketune"
+                    )
+                    return
+                
+                # Get the most recent file
+                latest_file = files[0]
+                
+                # Download the file
+                data = await client.download_shaper_graph(latest_file)
+                
+                if data:
+                    # Ask user where to save
+                    from PyQt6.QtWidgets import QFileDialog
+                    save_path, _ = QFileDialog.getSaveFileName(
+                        self, "Save Shaper Graph",
+                        f"shaper_calibration_{self._current_printer_config.get('name', 'printer')}.png",
+                        "PNG Images (*.png)"
+                    )
+                    
+                    if save_path:
+                        with open(save_path, 'wb') as f:
+                            f.write(data)
+                        QMessageBox.information(self, "Saved", f"Graph saved to:\n{save_path}")
+                else:
+                    QMessageBox.warning(self, "Error", "Failed to download graph file.")
+                    
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to get shaper graphs: {e}")
+        
+        asyncio.ensure_future(download_graphs())
+    
     def _check_pid_warning(self, hotend: float, bed: float, hotend_target: float, bed_target: float):
         """Check for temperature fluctuations that suggest PID tuning is needed"""
         self._temp_history_hotend.append(hotend)
@@ -2104,6 +2267,9 @@ class StatsPanel(QFrame):
             x_freq = shaper_data.get('shaper_freq_x', 0)
             y_type = shaper_data.get('shaper_type_y', '--')
             y_freq = shaper_data.get('shaper_freq_y', 0)
+            max_accel_x = shaper_data.get('max_accel_x', 0)
+            max_accel_y = shaper_data.get('max_accel_y', 0)
+            advice = shaper_data.get('advice', [])
             
             if x_type and x_freq > 0:
                 self.shaper_x_label.setText(f"{x_type.upper()} @ {x_freq:.1f} Hz")
@@ -2115,11 +2281,35 @@ class StatsPanel(QFrame):
             else:
                 self.shaper_y_label.setText("Not configured")
             
+            # Display recommended max acceleration
+            if max_accel_x > 0:
+                self.shaper_accel_x_label.setText(f"{max_accel_x:,} mm/s²")
+            else:
+                self.shaper_accel_x_label.setText("--")
+            
+            if max_accel_y > 0:
+                self.shaper_accel_y_label.setText(f"{max_accel_y:,} mm/s²")
+            else:
+                self.shaper_accel_y_label.setText("--")
+            
+            # Display advice
+            if advice:
+                self.shaper_advice_label.setText("\n".join(advice))
+                self.shaper_advice_label.setVisible(True)
+            else:
+                self.shaper_advice_label.setVisible(False)
+            
             self.shaper_calibrate_btn.setEnabled(True)
+            # Enable save graph button if shaper is configured
+            self.save_shaper_graph_btn.setEnabled(x_freq > 0 or y_freq > 0)
         else:
             self.shaper_x_label.setText("--")
             self.shaper_y_label.setText("--")
+            self.shaper_accel_x_label.setText("--")
+            self.shaper_accel_y_label.setText("--")
+            self.shaper_advice_label.setVisible(False)
             self.shaper_calibrate_btn.setEnabled(False)
+            self.save_shaper_graph_btn.setEnabled(False)
     
     def set_printer_config(self, config):
         """Set current printer config for G-code commands"""
@@ -2149,7 +2339,11 @@ class StatsPanel(QFrame):
         self.pid_warning_frame.setVisible(False)
         self.shaper_x_label.setText("--")
         self.shaper_y_label.setText("--")
+        self.shaper_accel_x_label.setText("--")
+        self.shaper_accel_y_label.setText("--")
+        self.shaper_advice_label.setVisible(False)
         self.shaper_calibrate_btn.setEnabled(False)
+        self.save_shaper_graph_btn.setEnabled(False)
         self._temp_history_hotend.clear()
         self._temp_history_bed.clear()
         self._current_printer_config = None
