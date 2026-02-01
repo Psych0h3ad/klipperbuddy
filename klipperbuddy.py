@@ -1190,6 +1190,7 @@ class PrinterCard(QFrame):
     
     camera_clicked = pyqtSignal(str)  # webcam_url
     card_clicked = pyqtSignal(object)  # self - emitted when card is clicked
+    login_requested = pyqtSignal(object)  # self - emitted when login is requested
     
     # State-based border colors
     STATE_COLORS = {
@@ -1264,7 +1265,7 @@ class PrinterCard(QFrame):
         if self.compact_mode:
             self.setFixedSize(190, 280)  # Compact card without camera
         else:
-            self.setFixedSize(340, 380)  # Standard card with camera (adjusted height)
+            self.setFixedSize(340, 440)  # Standard card with camera (larger camera preview)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(4)
@@ -1291,8 +1292,8 @@ class PrinterCard(QFrame):
         # Camera preview section (only in standard mode)
         if not self.compact_mode:
             self.camera_frame = QFrame()
-            # 16:9 aspect ratio: width 316 (340-24 margins) -> height ~178, use 100 for compact
-            self.camera_frame.setFixedHeight(100)
+            # 16:9 aspect ratio: width 316 (340-24 margins) -> height ~178
+            self.camera_frame.setFixedHeight(160)
             self.camera_frame.setStyleSheet(f"""
                 QFrame {{
                     background-color: #0a0a0a;
@@ -1684,10 +1685,24 @@ class PrinterCard(QFrame):
             self.config.password = password
             # Emit signal to save config and refresh
             self.login_btn.setVisible(False)
-            # Trigger refresh
+            # Trigger refresh with new credentials
             if self.client:
                 self.client.username = username
                 self.client.password = password
+                self.client._token = None  # Clear old token
+                if self.client._session:
+                    import asyncio
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.ensure_future(self.client._session.close())
+                        else:
+                            loop.run_until_complete(self.client._session.close())
+                    except:
+                        pass
+                    self.client._session = None
+            # Emit signal to trigger status refresh
+            self.login_requested.emit(self)
     
     def update_status(self, status: PrinterStatus):
         self.status = status
@@ -3488,9 +3503,14 @@ class MainWindow(QMainWindow):
             # Clear status after 5 seconds
             QTimer.singleShot(5000, lambda: self.status_label.setText("Ready"))
         
+        def on_error(e):
+            self.status_label.setText(f"Scan error: {e}")
+            # Clear status after 5 seconds
+            QTimer.singleShot(5000, lambda: self.status_label.setText("Ready"))
+        
         worker = AsyncWorker(scan)
         worker.result_ready.connect(on_result)
-        worker.error_occurred.connect(lambda e: self.status_label.setText(f"Scan error: {e}"))
+        worker.error_occurred.connect(on_error)
         self.update_workers.append(worker)
         worker.start()
     
@@ -3588,11 +3608,11 @@ class MainWindow(QMainWindow):
         
         # Right side - Stats panel (has internal scrolling)
         self.stats_panel = StatsPanel()
-        self.stats_panel.setMinimumWidth(320)
-        self.stats_panel.setMaximumWidth(380)
+        self.stats_panel.setMinimumWidth(300)
+        self.stats_panel.setMaximumWidth(350)
         splitter.addWidget(self.stats_panel)
         
-        splitter.setSizes([900, 320])
+        splitter.setSizes([900, 300])
         splitter.setStretchFactor(0, 1)  # Left side stretches
         splitter.setStretchFactor(1, 0)  # Right side fixed width
         
@@ -3618,6 +3638,7 @@ class MainWindow(QMainWindow):
         card = PrinterCard(config, compact_mode=compact_mode)
         card.camera_clicked.connect(self._on_camera_clicked)
         card.card_clicked.connect(self._on_card_clicked)
+        card.login_requested.connect(self._on_login_requested)
         self.printer_cards[key] = card
         
         # Add to grid - more columns in compact mode
@@ -3684,6 +3705,13 @@ class MainWindow(QMainWindow):
     
     def _on_camera_clicked(self, webcam_url: str):
         self.stats_panel.set_webcam_url(webcam_url)
+    
+    def _on_login_requested(self, card: PrinterCard):
+        """Handle login request - save config and refresh status"""
+        # Save updated credentials to config
+        self.config_manager.save()
+        # Trigger status refresh for this printer
+        self._refresh_printer_status(card, full_refresh=True)
     
     def _on_card_clicked(self, card: PrinterCard):
         """Handle card selection"""
