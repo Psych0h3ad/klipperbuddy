@@ -1558,7 +1558,7 @@ class PrinterCard(QFrame):
             }}
             QPushButton:hover {{
                 background-color: #ff8800;
-                color: {COLORS['background']};
+                color: {COLORS['bg_dark']};
             }}
         """)
         self.login_btn.clicked.connect(self._on_login_click)
@@ -3091,7 +3091,7 @@ class LoginDialog(QDialog):
         # Apply dark theme
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {COLORS['background']};
+                background-color: {COLORS['bg_dark']};
             }}
             QLabel {{
                 color: {COLORS['text_primary']};
@@ -3108,7 +3108,7 @@ class LoginDialog(QDialog):
             }}
             QPushButton {{
                 background-color: {COLORS['accent']};
-                color: {COLORS['background']};
+                color: {COLORS['bg_dark']};
                 border: none;
                 border-radius: 4px;
                 padding: 8px 16px;
