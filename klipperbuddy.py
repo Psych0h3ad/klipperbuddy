@@ -67,8 +67,10 @@ COLORS = {
     'bg_dark': '#0a0a0a',
     'bg_card': '#141414',
     'bg_card_hover': '#1a1a1a',
+    'surface': '#1a1a1a',  # For dialog backgrounds
     'accent': '#0ABAB5',  # Tiffany Blue
     'accent_dark': '#088F8B',
+    'accent_hover': '#0CD5D0',  # Lighter tiffany for hover
     'accent_glow': '#0ABAB5',
     'text_primary': '#ffffff',
     'text_secondary': '#888888',
@@ -504,26 +506,28 @@ class MoonrakerClient:
     
     async def get_printer_name(self) -> str:
         """Get the best available printer name"""
-        # Try Fluidd config first (instanceName)
+        # Try Fluidd config first (instanceName) - user-configured names have highest priority
         try:
             resp = await self._request('GET', '/server/database/item?namespace=fluidd&key=uiSettings')
             if resp and 'result' in resp:
                 value = resp['result'].get('value', {})
                 if isinstance(value, dict):
                     name = value.get('general', {}).get('instanceName')
-                    if name and name.strip() and not self._is_generic_name(name.strip()):
+                    if name and name.strip():
+                        # User explicitly set this name in Fluidd, always use it
                         return name.strip()
         except:
             pass
         
-        # Try Mainsail config (instanceName)
+        # Try Mainsail config (instanceName) - user-configured names have highest priority
         try:
             resp = await self._request('GET', '/server/database/item?namespace=mainsail&key=general')
             if resp and 'result' in resp:
                 value = resp['result'].get('value', {})
                 if isinstance(value, dict):
                     name = value.get('instanceName')
-                    if name and name.strip() and not self._is_generic_name(name.strip()):
+                    if name and name.strip():
+                        # User explicitly set this name in Mainsail, always use it
                         return name.strip()
         except:
             pass
@@ -596,7 +600,7 @@ class MoonrakerClient:
         """Check if name is a generic/default name that should be skipped"""
         generic_names = [
             'klipper', 'printer', 'mainsail', 'fluidd', 'localhost',
-            'raspberry', 'raspberrypi', 'pi', 'mks', 'btt', 'lava',
+            'raspberry', 'raspberrypi', 'pi', 'mks', 'btt',
             'sonic', 'pad', 'host'
         ]
         name_lower = name.lower()
@@ -1345,12 +1349,12 @@ class PrinterCard(QFrame):
     
     def _setup_ui(self):
         if self.compact_mode:
-            self.setFixedSize(200, 300)  # Compact card without camera
+            self.setFixedSize(230, 280)  # Compact card without camera (6 columns at 1920)
         else:
-            self.setFixedSize(360, 480)  # Standard card with camera (larger for T1-T3)
+            self.setFixedSize(320, 420)  # Standard card with camera (3 columns + sidebar at 1920)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(3)
         
         # Header with name and status indicator
         header = QHBoxLayout()
@@ -1360,9 +1364,9 @@ class PrinterCard(QFrame):
         header.addWidget(self.status_indicator)
         
         self.name_label = QLabel(self.config.name or self.config.host)
-        self.name_label.setFont(QFont("Play", 12, QFont.Weight.Bold))  # Slightly smaller font
+        self.name_label.setFont(QFont("Play", 11 if self.compact_mode else 12, QFont.Weight.Bold))
         self.name_label.setStyleSheet(f"color: {COLORS['accent']};")
-        self.name_label.setMaximumWidth(180 if self.compact_mode else 220)  # Limit width
+        self.name_label.setMaximumWidth(140 if self.compact_mode else 200)  # Limit width for card size
         self.name_label.setToolTip(self.config.name or self.config.host)  # Full name in tooltip
         header.addWidget(self.name_label)
         header.addStretch()
@@ -1965,24 +1969,25 @@ class StatsPanel(QFrame):
         # Content widget inside scroll area
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(8, 8, 16, 8)  # Extra right margin for scrollbar
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 12, 6)  # Compact margins
+        layout.setSpacing(3)
         
         # Selected printer name
         self.printer_name_label = QLabel("Select a printer")
-        self.printer_name_label.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        self.printer_name_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
         self.printer_name_label.setStyleSheet(f"color: {COLORS['accent']};")
         self.printer_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.printer_name_label.setWordWrap(True)  # Allow wrapping for long names
         layout.addWidget(self.printer_name_label)
         
         # Temperature Graph
         graph_header = QHBoxLayout()
-        graph_header.setSpacing(6)
+        graph_header.setSpacing(4)
         graph_icon = QLabel()
-        graph_icon.setPixmap(get_icon("temperature").pixmap(16, 16))
+        graph_icon.setPixmap(get_icon("temperature").pixmap(14, 14))
         graph_header.addWidget(graph_icon)
         graph_label = QLabel("TEMPERATURE GRAPH")
-        graph_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
+        graph_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         graph_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         graph_header.addWidget(graph_label)
         graph_header.addStretch()
@@ -1995,19 +2000,20 @@ class StatsPanel(QFrame):
         
         # Current temps display
         temp_display = QHBoxLayout()
+        temp_display.setSpacing(2)
         
         self.hotend_label = QLabel("Hotend: --°C")
-        self.hotend_label.setFont(QFont("Play", 9))
+        self.hotend_label.setFont(QFont("Play", 8))
         self.hotend_label.setStyleSheet(f"color: {COLORS['temp_hotend']};")
         temp_display.addWidget(self.hotend_label)
         
         self.bed_label = QLabel("Bed: --°C")
-        self.bed_label.setFont(QFont("Play", 9))
+        self.bed_label.setFont(QFont("Play", 8))
         self.bed_label.setStyleSheet(f"color: {COLORS['temp_bed']};")
         temp_display.addWidget(self.bed_label)
         
         self.chamber_label = QLabel("Chamber: --°C")
-        self.chamber_label.setFont(QFont("Play", 9))
+        self.chamber_label.setFont(QFont("Play", 8))
         self.chamber_label.setStyleSheet(f"color: {COLORS['temp_chamber']};")
         temp_display.addWidget(self.chamber_label)
         
@@ -2021,19 +2027,19 @@ class StatsPanel(QFrame):
         
         # Camera Preview section
         cam_header = QHBoxLayout()
-        cam_header.setSpacing(6)
+        cam_header.setSpacing(4)
         cam_icon = QLabel()
-        cam_icon.setPixmap(get_icon("camera").pixmap(16, 16))
+        cam_icon.setPixmap(get_icon("camera").pixmap(14, 14))
         cam_header.addWidget(cam_icon)
         cam_label = QLabel("CAMERA PREVIEW")
-        cam_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
+        cam_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         cam_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         cam_header.addWidget(cam_label)
         cam_header.addStretch()
         layout.addLayout(cam_header)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(120)
+        self.camera_frame.setFixedHeight(100)
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
@@ -2075,45 +2081,53 @@ class StatsPanel(QFrame):
         
         # Statistics section
         stats_header = QHBoxLayout()
-        stats_header.setSpacing(6)
+        stats_header.setSpacing(4)
         stats_icon = QLabel()
-        stats_icon.setPixmap(get_icon("stats").pixmap(16, 16))
+        stats_icon.setPixmap(get_icon("stats").pixmap(14, 14))
         stats_header.addWidget(stats_icon)
         stats_label = QLabel("STATISTICS")
-        stats_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        stats_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         stats_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_header.addWidget(stats_label)
         stats_header.addStretch()
         layout.addLayout(stats_header)
         
         stats_grid = QGridLayout()
-        stats_grid.setSpacing(2)
+        stats_grid.setSpacing(1)
         
         # Total Print Time
-        stats_grid.addWidget(QLabel("Total Print Time:"), 0, 0)
+        lbl = QLabel("Total Print Time:")
+        lbl.setFont(QFont("Play", 8))
+        stats_grid.addWidget(lbl, 0, 0)
         self.total_time_label = QLabel("--")
-        self.total_time_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
+        self.total_time_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
         self.total_time_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_grid.addWidget(self.total_time_label, 0, 1)
         
         # Total Filament
-        stats_grid.addWidget(QLabel("Filament Used:"), 1, 0)
+        lbl = QLabel("Filament Used:")
+        lbl.setFont(QFont("Play", 8))
+        stats_grid.addWidget(lbl, 1, 0)
         self.total_filament_label = QLabel("--")
-        self.total_filament_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
+        self.total_filament_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
         self.total_filament_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_grid.addWidget(self.total_filament_label, 1, 1)
         
         # Print Count
-        stats_grid.addWidget(QLabel("Print Count:"), 2, 0)
+        lbl = QLabel("Print Count:")
+        lbl.setFont(QFont("Play", 8))
+        stats_grid.addWidget(lbl, 2, 0)
         self.print_count_label = QLabel("--")
-        self.print_count_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
+        self.print_count_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
         self.print_count_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_grid.addWidget(self.print_count_label, 2, 1)
         
         # Success Rate
-        stats_grid.addWidget(QLabel("Success Rate:"), 3, 0)
+        lbl = QLabel("Success Rate:")
+        lbl.setFont(QFont("Play", 8))
+        stats_grid.addWidget(lbl, 3, 0)
         self.success_rate_label = QLabel("--")
-        self.success_rate_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
+        self.success_rate_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
         self.success_rate_label.setStyleSheet(f"color: {COLORS['success']};")
         stats_grid.addWidget(self.success_rate_label, 3, 1)
         
@@ -2127,42 +2141,50 @@ class StatsPanel(QFrame):
         
         # System Info section
         sys_header = QHBoxLayout()
-        sys_header.setSpacing(6)
+        sys_header.setSpacing(4)
         sys_icon = QLabel()
-        sys_icon.setPixmap(get_icon("system").pixmap(16, 16))
+        sys_icon.setPixmap(get_icon("system").pixmap(14, 14))
         sys_header.addWidget(sys_icon)
         sys_label = QLabel("SYSTEM INFO")
-        sys_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        sys_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         sys_label.setStyleSheet(f"color: {COLORS['accent']};")
         sys_header.addWidget(sys_label)
         sys_header.addStretch()
         layout.addLayout(sys_header)
         
         sys_grid = QGridLayout()
-        sys_grid.setSpacing(2)
+        sys_grid.setSpacing(1)
         
-        sys_grid.addWidget(QLabel("Klipper:"), 0, 0)
+        lbl = QLabel("Klipper:")
+        lbl.setFont(QFont("Play", 8))
+        sys_grid.addWidget(lbl, 0, 0)
         self.klipper_ver_label = QLabel("--")
-        self.klipper_ver_label.setFont(QFont("Play", 9))
+        self.klipper_ver_label.setFont(QFont("Play", 8))
         sys_grid.addWidget(self.klipper_ver_label, 0, 1)
         
-        sys_grid.addWidget(QLabel("Moonraker:"), 1, 0)
+        lbl = QLabel("Moonraker:")
+        lbl.setFont(QFont("Play", 8))
+        sys_grid.addWidget(lbl, 1, 0)
         self.moonraker_ver_label = QLabel("--")
-        self.moonraker_ver_label.setFont(QFont("Play", 9))
+        self.moonraker_ver_label.setFont(QFont("Play", 8))
         sys_grid.addWidget(self.moonraker_ver_label, 1, 1)
         
-        sys_grid.addWidget(QLabel("OS:"), 2, 0)
+        lbl = QLabel("OS:")
+        lbl.setFont(QFont("Play", 8))
+        sys_grid.addWidget(lbl, 2, 0)
         self.os_label = QLabel("--")
-        self.os_label.setFont(QFont("Play", 9))
+        self.os_label.setFont(QFont("Play", 8))
         sys_grid.addWidget(self.os_label, 2, 1)
         
         layout.addLayout(sys_grid)
         
         # Disk usage
         disk_layout = QHBoxLayout()
-        disk_layout.addWidget(QLabel("Disk:"))
+        lbl = QLabel("Disk:")
+        lbl.setFont(QFont("Play", 8))
+        disk_layout.addWidget(lbl)
         self.disk_label = QLabel("-- / --")
-        self.disk_label.setFont(QFont("Play", 9))
+        self.disk_label.setFont(QFont("Play", 8))
         disk_layout.addWidget(self.disk_label)
         layout.addLayout(disk_layout)
         
@@ -2183,10 +2205,10 @@ class StatsPanel(QFrame):
         self.mmu_section = QWidget()
         mmu_layout = QVBoxLayout(self.mmu_section)
         mmu_layout.setContentsMargins(0, 0, 0, 0)
-        mmu_layout.setSpacing(4)
+        mmu_layout.setSpacing(2)
         
         self.mmu_label = QLabel("🎨 MULTI-COLOR UNIT")
-        self.mmu_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        self.mmu_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         self.mmu_label.setStyleSheet(f"color: {COLORS['accent']};")
         mmu_layout.addWidget(self.mmu_label)
         
@@ -2199,14 +2221,16 @@ class StatsPanel(QFrame):
             }}
         """)
         mmu_frame_layout = QVBoxLayout(self.mmu_frame)
-        mmu_frame_layout.setContentsMargins(8, 8, 8, 8)
-        mmu_frame_layout.setSpacing(4)
+        mmu_frame_layout.setContentsMargins(4, 4, 4, 4)
+        mmu_frame_layout.setSpacing(2)
         
         # MMU Type
         mmu_type_layout = QHBoxLayout()
-        mmu_type_layout.addWidget(QLabel("Type:"))
+        lbl = QLabel("Type:")
+        lbl.setFont(QFont("Play", 8))
+        mmu_type_layout.addWidget(lbl)
         self.mmu_type_label = QLabel("--")
-        self.mmu_type_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.mmu_type_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
         self.mmu_type_label.setStyleSheet(f"color: {COLORS['accent']};")
         mmu_type_layout.addWidget(self.mmu_type_label)
         mmu_type_layout.addStretch()
@@ -2214,18 +2238,22 @@ class StatsPanel(QFrame):
         
         # Gate info
         mmu_gate_layout = QHBoxLayout()
-        mmu_gate_layout.addWidget(QLabel("Gates:"))
+        lbl = QLabel("Gates:")
+        lbl.setFont(QFont("Play", 8))
+        mmu_gate_layout.addWidget(lbl)
         self.mmu_gate_label = QLabel("--")
-        self.mmu_gate_label.setFont(QFont("Play", 10))
+        self.mmu_gate_label.setFont(QFont("Play", 8))
         mmu_gate_layout.addWidget(self.mmu_gate_label)
         mmu_gate_layout.addStretch()
         mmu_frame_layout.addLayout(mmu_gate_layout)
         
         # Current gate
         mmu_current_layout = QHBoxLayout()
-        mmu_current_layout.addWidget(QLabel("Current:"))
+        lbl = QLabel("Current:")
+        lbl.setFont(QFont("Play", 8))
+        mmu_current_layout.addWidget(lbl)
         self.mmu_current_label = QLabel("--")
-        self.mmu_current_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.mmu_current_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
         self.mmu_current_label.setStyleSheet(f"color: {COLORS['success']};")
         mmu_current_layout.addWidget(self.mmu_current_label)
         mmu_current_layout.addStretch()
@@ -2233,7 +2261,7 @@ class StatsPanel(QFrame):
         
         # Filament loaded status
         self.mmu_loaded_label = QLabel("● Filament: --")
-        self.mmu_loaded_label.setFont(QFont("Play", 9))
+        self.mmu_loaded_label.setFont(QFont("Play", 8))
         mmu_frame_layout.addWidget(self.mmu_loaded_label)
         
         mmu_layout.addWidget(self.mmu_frame)
@@ -2249,12 +2277,12 @@ class StatsPanel(QFrame):
         
         # Tuning Advisor section
         tuning_header = QHBoxLayout()
-        tuning_header.setSpacing(6)
+        tuning_header.setSpacing(4)
         tuning_icon = QLabel()
-        tuning_icon.setPixmap(get_icon("tuning").pixmap(16, 16))
+        tuning_icon.setPixmap(get_icon("tuning").pixmap(14, 14))
         tuning_header.addWidget(tuning_icon)
         tuning_label = QLabel("TUNING ADVISOR")
-        tuning_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        tuning_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         tuning_label.setStyleSheet(f"color: {COLORS['accent']};")
         tuning_header.addWidget(tuning_label)
         tuning_header.addStretch()
@@ -2305,39 +2333,47 @@ class StatsPanel(QFrame):
             }}
         """)
         shaper_layout = QVBoxLayout(self.shaper_frame)
-        shaper_layout.setContentsMargins(6, 6, 6, 6)
-        shaper_layout.setSpacing(2)
+        shaper_layout.setContentsMargins(4, 4, 4, 4)
+        shaper_layout.setSpacing(1)
         
         shaper_title = QLabel("Input Shaper")
-        shaper_title.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        shaper_title.setFont(QFont("Play", 9, QFont.Weight.Bold))
         shaper_title.setStyleSheet(f"color: {COLORS['text_secondary']};")
         shaper_layout.addWidget(shaper_title)
         
         shaper_grid = QGridLayout()
-        shaper_grid.setSpacing(4)
+        shaper_grid.setSpacing(2)
         
-        shaper_grid.addWidget(QLabel("X Axis:"), 0, 0)
+        lbl = QLabel("X Axis:")
+        lbl.setFont(QFont("Play", 8))
+        shaper_grid.addWidget(lbl, 0, 0)
         self.shaper_x_label = QLabel("--")
-        self.shaper_x_label.setFont(QFont("Play", 9))
+        self.shaper_x_label.setFont(QFont("Play", 8))
         self.shaper_x_label.setStyleSheet(f"color: {COLORS['accent']};")
         shaper_grid.addWidget(self.shaper_x_label, 0, 1)
         
-        shaper_grid.addWidget(QLabel("Y Axis:"), 1, 0)
+        lbl = QLabel("Y Axis:")
+        lbl.setFont(QFont("Play", 8))
+        shaper_grid.addWidget(lbl, 1, 0)
         self.shaper_y_label = QLabel("--")
-        self.shaper_y_label.setFont(QFont("Play", 9))
+        self.shaper_y_label.setFont(QFont("Play", 8))
         self.shaper_y_label.setStyleSheet(f"color: {COLORS['accent']};")
         shaper_grid.addWidget(self.shaper_y_label, 1, 1)
         
         # Max acceleration recommendations
-        shaper_grid.addWidget(QLabel("Max Accel X:"), 2, 0)
+        lbl = QLabel("Max Accel X:")
+        lbl.setFont(QFont("Play", 8))
+        shaper_grid.addWidget(lbl, 2, 0)
         self.shaper_accel_x_label = QLabel("--")
-        self.shaper_accel_x_label.setFont(QFont("Play", 9))
+        self.shaper_accel_x_label.setFont(QFont("Play", 8))
         self.shaper_accel_x_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         shaper_grid.addWidget(self.shaper_accel_x_label, 2, 1)
         
-        shaper_grid.addWidget(QLabel("Max Accel Y:"), 3, 0)
+        lbl = QLabel("Max Accel Y:")
+        lbl.setFont(QFont("Play", 8))
+        shaper_grid.addWidget(lbl, 3, 0)
         self.shaper_accel_y_label = QLabel("--")
-        self.shaper_accel_y_label.setFont(QFont("Play", 9))
+        self.shaper_accel_y_label.setFont(QFont("Play", 8))
         self.shaper_accel_y_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         shaper_grid.addWidget(self.shaper_accel_y_label, 3, 1)
         
@@ -2381,12 +2417,12 @@ class StatsPanel(QFrame):
         
         # Log Analyzer section
         log_header = QHBoxLayout()
-        log_header.setSpacing(6)
+        log_header.setSpacing(4)
         log_icon = QLabel()
-        log_icon.setPixmap(get_icon("log").pixmap(16, 16))
+        log_icon.setPixmap(get_icon("log").pixmap(14, 14))
         log_header.addWidget(log_icon)
         log_label = QLabel("LOG ANALYZER")
-        log_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        log_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         log_label.setStyleSheet(f"color: {COLORS['accent']};")
         log_header.addWidget(log_label)
         log_header.addStretch()
@@ -2406,7 +2442,7 @@ class StatsPanel(QFrame):
         
         # Log status
         self.log_status_label = QLabel("No log analyzed yet")
-        self.log_status_label.setFont(QFont("Play", 9))
+        self.log_status_label.setFont(QFont("Play", 8))
         self.log_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         self.log_status_label.setWordWrap(True)
         log_layout.addWidget(self.log_status_label)
@@ -2414,12 +2450,12 @@ class StatsPanel(QFrame):
         # Error/Warning counts
         log_stats_layout = QHBoxLayout()
         self.log_errors_label = QLabel("⚠️ Errors: --")
-        self.log_errors_label.setFont(QFont("Play", 9))
+        self.log_errors_label.setFont(QFont("Play", 8))
         self.log_errors_label.setStyleSheet(f"color: {COLORS['error']};")
         log_stats_layout.addWidget(self.log_errors_label)
         
         self.log_warnings_label = QLabel("⚠️ Warnings: --")
-        self.log_warnings_label.setFont(QFont("Play", 9))
+        self.log_warnings_label.setFont(QFont("Play", 8))
         self.log_warnings_label.setStyleSheet(f"color: {COLORS['warning']};")
         log_stats_layout.addWidget(self.log_warnings_label)
         log_layout.addLayout(log_stats_layout)
@@ -2468,12 +2504,12 @@ class StatsPanel(QFrame):
         
         # Config Backup section
         backup_header = QHBoxLayout()
-        backup_header.setSpacing(6)
+        backup_header.setSpacing(4)
         backup_icon = QLabel()
-        backup_icon.setPixmap(get_icon("backup").pixmap(16, 16))
+        backup_icon.setPixmap(get_icon("backup").pixmap(14, 14))
         backup_header.addWidget(backup_icon)
         backup_label = QLabel("CONFIG BACKUP")
-        backup_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        backup_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         backup_label.setStyleSheet(f"color: {COLORS['accent']};")
         backup_header.addWidget(backup_label)
         backup_header.addStretch()
@@ -2489,11 +2525,11 @@ class StatsPanel(QFrame):
         """)
         backup_layout = QVBoxLayout(backup_frame)
         backup_layout.setContentsMargins(4, 4, 4, 4)
-        backup_layout.setSpacing(4)
+        backup_layout.setSpacing(2)
         
         # Backup status
         self.backup_status_label = QLabel("Backup printer.cfg and configs")
-        self.backup_status_label.setFont(QFont("Play", 9))
+        self.backup_status_label.setFont(QFont("Play", 8))
         self.backup_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         self.backup_status_label.setWordWrap(True)
         backup_layout.addWidget(self.backup_status_label)
@@ -3105,8 +3141,9 @@ class StatsPanel(QFrame):
             client = MoonrakerClient(
                 self._current_printer_config.host,
                 self._current_printer_config.port,
-                self._current_printer_config.username,
-                self._current_printer_config.password
+                api_key="",  # No API key needed for config backup
+                username=self._current_printer_config.username or "",
+                password=self._current_printer_config.password or ""
             )
             
             loop = asyncio.new_event_loop()
@@ -3831,11 +3868,10 @@ class MainWindow(QMainWindow):
         
         # Right side - Stats panel (has internal scrolling)
         self.stats_panel = StatsPanel()
-        self.stats_panel.setMinimumWidth(320)
-        self.stats_panel.setMaximumWidth(400)
+        self.stats_panel.setFixedWidth(300)  # Fixed width to prevent overflow
         splitter.addWidget(self.stats_panel)
         
-        splitter.setSizes([900, 300])
+        splitter.setSizes([1100, 300])
         splitter.setStretchFactor(0, 1)  # Left side stretches
         splitter.setStretchFactor(1, 0)  # Right side fixed width
         
@@ -3867,7 +3903,7 @@ class MainWindow(QMainWindow):
         
         # Add to grid - more columns in compact mode
         count = len(self.printer_cards) - 1
-        cols = 5 if compact_mode else 3
+        cols = 6 if compact_mode else 3  # 6 columns for compact (1920px), 3 for standard
         row = count // cols
         col = count % cols
         self.cards_layout.addWidget(card, row, col)
@@ -3887,7 +3923,7 @@ class MainWindow(QMainWindow):
         
         # Re-add in order
         compact_mode = self.config_manager.get_setting('compact_mode', False)
-        cols = 5 if compact_mode else 3
+        cols = 6 if compact_mode else 3  # 6 columns for compact (1920px), 3 for standard
         for i, card in enumerate(self.printer_cards.values()):
             row = i // cols
             col = i % cols
