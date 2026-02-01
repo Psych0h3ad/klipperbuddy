@@ -972,6 +972,82 @@ class MoonrakerClient:
         except:
             pass
         return None
+    
+    async def list_config_files(self) -> List[Dict]:
+        """List all configuration files"""
+        try:
+            resp = await self._request('GET', '/server/files/list?root=config')
+            if resp and 'result' in resp:
+                return resp['result']
+        except:
+            pass
+        return []
+    
+    async def download_config_file(self, filename: str) -> Optional[bytes]:
+        """Download a configuration file"""
+        try:
+            session = await self._get_session()
+            url = f"{self.base_url}/server/files/config/{filename}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+        except:
+            pass
+        return None
+    
+    async def backup_all_configs(self, backup_dir: str, progress_callback=None) -> Dict:
+        """Backup all configuration files to a local directory"""
+        import zipfile
+        from datetime import datetime
+        
+        result = {
+            'success': False,
+            'files_backed_up': 0,
+            'total_files': 0,
+            'backup_path': '',
+            'errors': []
+        }
+        
+        try:
+            files = await self.list_config_files()
+            result['total_files'] = len(files)
+            
+            if not files:
+                result['errors'].append('No configuration files found')
+                return result
+            
+            backup_path = Path(backup_dir)
+            backup_path.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            printer_name = self.host.replace('.', '_').replace(':', '_')
+            zip_filename = f"klipper_backup_{printer_name}_{timestamp}.zip"
+            zip_path = backup_path / zip_filename
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for i, file_info in enumerate(files):
+                    filename = file_info.get('path', '')
+                    if not filename:
+                        continue
+                    
+                    try:
+                        content = await self.download_config_file(filename)
+                        if content:
+                            zipf.writestr(filename, content)
+                            result['files_backed_up'] += 1
+                    except Exception as e:
+                        result['errors'].append(f"Failed to backup {filename}: {str(e)}")
+                    
+                    if progress_callback:
+                        progress_callback(int((i + 1) / len(files) * 100))
+            
+            result['success'] = result['files_backed_up'] > 0
+            result['backup_path'] = str(zip_path)
+            
+        except Exception as e:
+            result['errors'].append(f"Backup failed: {str(e)}")
+        
+        return result
 
 
 # =============================================================================
@@ -1057,6 +1133,8 @@ class NetworkScanner:
 
 class AsyncWorker(QThread):
     finished = pyqtSignal(object)
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
     
     def __init__(self, coro):
         super().__init__()
@@ -1068,6 +1146,9 @@ class AsyncWorker(QThread):
         try:
             result = loop.run_until_complete(self.coro)
             self.finished.emit(result)
+            self.result_ready.emit(result)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
         finally:
             loop.close()
 
@@ -2379,6 +2460,66 @@ class StatsPanel(QFrame):
         
         layout.addWidget(log_frame)
         
+        # Separator before Config Backup
+        line6 = QFrame()
+        line6.setFrameShape(QFrame.Shape.HLine)
+        line6.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line6)
+        
+        # Config Backup section
+        backup_header = QHBoxLayout()
+        backup_header.setSpacing(6)
+        backup_icon = QLabel()
+        backup_icon.setPixmap(get_icon("backup").pixmap(16, 16))
+        backup_header.addWidget(backup_icon)
+        backup_label = QLabel("CONFIG BACKUP")
+        backup_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        backup_label.setStyleSheet(f"color: {COLORS['accent']};")
+        backup_header.addWidget(backup_label)
+        backup_header.addStretch()
+        layout.addLayout(backup_header)
+        
+        backup_frame = QFrame()
+        backup_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+        """)
+        backup_layout = QVBoxLayout(backup_frame)
+        backup_layout.setContentsMargins(4, 4, 4, 4)
+        backup_layout.setSpacing(4)
+        
+        # Backup status
+        self.backup_status_label = QLabel("Backup printer.cfg and configs")
+        self.backup_status_label.setFont(QFont("Play", 9))
+        self.backup_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.backup_status_label.setWordWrap(True)
+        backup_layout.addWidget(self.backup_status_label)
+        
+        # Backup button
+        self.backup_config_btn = QPushButton("📦 Backup Configs")
+        self.backup_config_btn.setFixedHeight(28)
+        self.backup_config_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['accent']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+                color: {COLORS['bg_dark']};
+            }}
+        """)
+        self.backup_config_btn.clicked.connect(self._backup_configs)
+        self.backup_config_btn.setEnabled(False)
+        backup_layout.addWidget(self.backup_config_btn)
+        
+        layout.addWidget(backup_frame)
+        
         # Set content widget to scroll area and add to main layout
         scroll_area.setWidget(content_widget)
         main_layout.addWidget(scroll_area)
@@ -2787,6 +2928,7 @@ class StatsPanel(QFrame):
         self.emergency_stop_btn.setEnabled(enabled)
         self.analyze_log_btn.setEnabled(enabled)
         self.download_log_btn.setEnabled(enabled)
+        self.backup_config_btn.setEnabled(enabled)
     
     def _firmware_restart(self):
         """Send FIRMWARE_RESTART command"""
@@ -2936,6 +3078,64 @@ class StatsPanel(QFrame):
         except Exception as e:
             self.log_status_label.setText(f"Error: {str(e)[:50]}")
             self.log_status_label.setStyleSheet(f"color: {COLORS['error']};")
+    
+    def _backup_configs(self):
+        """Backup all Klipper configuration files"""
+        if not self._current_printer_config:
+            return
+        
+        from pathlib import Path
+        default_path = Path.home() / "Documents" / "KlipperBuddy" / "backups"
+        default_path.mkdir(parents=True, exist_ok=True)
+        
+        save_dir = QFileDialog.getExistingDirectory(
+            self, "Select Backup Directory",
+            str(default_path)
+        )
+        
+        if not save_dir:
+            return
+        
+        self.backup_status_label.setText("Backing up...")
+        self.backup_config_btn.setEnabled(False)
+        QApplication.processEvents()
+        
+        try:
+            import asyncio
+            client = MoonrakerClient(
+                self._current_printer_config.host,
+                self._current_printer_config.port,
+                self._current_printer_config.username,
+                self._current_printer_config.password
+            )
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(client.backup_all_configs(save_dir))
+            finally:
+                loop.close()
+            
+            if result['success']:
+                self.backup_status_label.setText(f"Backed up {result['files_backed_up']} files")
+                self.backup_status_label.setStyleSheet(f"color: {COLORS['success']};")
+                
+                QMessageBox.information(
+                    self, "Backup Complete",
+                    f"Successfully backed up {result['files_backed_up']} configuration files.\n\n"
+                    f"Saved to:\n{result['backup_path']}"
+                )
+            else:
+                errors = '\n'.join(result['errors'][:3])
+                self.backup_status_label.setText("Backup failed")
+                self.backup_status_label.setStyleSheet(f"color: {COLORS['error']};")
+                QMessageBox.warning(self, "Backup Failed", f"Errors:\n{errors}")
+                
+        except Exception as e:
+            self.backup_status_label.setText(f"Error: {str(e)[:50]}")
+            self.backup_status_label.setStyleSheet(f"color: {COLORS['error']};")
+        finally:
+            self.backup_config_btn.setEnabled(True)
 
 
 # =============================================================================
@@ -3469,10 +3669,6 @@ class MainWindow(QMainWindow):
         
         self._setup_ui()
         self._load_printers()
-        self._setup_system_tray()
-        
-        # Apply window settings
-        self._apply_window_settings()
         
         # Connect G-code request handler
         self.stats_panel.gcode_requested = self._send_gcode
