@@ -24,12 +24,13 @@ from PyQt6.QtWidgets import (
     QGridLayout, QLabel, QPushButton, QLineEdit, QDialog, QDialogButtonBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QProgressBar,
     QMessageBox, QFrame, QScrollArea, QSpinBox, QFormLayout, QGraphicsDropShadowEffect,
-    QSplitter, QGroupBox, QSizePolicy, QFileDialog
+    QSplitter, QGroupBox, QSizePolicy, QFileDialog, QSystemTrayIcon, QMenu,
+    QSlider, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QRect, QPoint, QMargins
 from PyQt6.QtGui import (
     QFont, QColor, QPalette, QLinearGradient, QPainter, QBrush, QPen,
-    QFontDatabase, QPixmap, QPainterPath, QPaintEvent, QIcon
+    QFontDatabase, QPixmap, QPainterPath, QPaintEvent, QIcon, QAction
 )
 
 import aiohttp
@@ -1263,9 +1264,9 @@ class PrinterCard(QFrame):
     
     def _setup_ui(self):
         if self.compact_mode:
-            self.setFixedSize(190, 280)  # Compact card without camera
+            self.setFixedSize(200, 300)  # Compact card without camera
         else:
-            self.setFixedSize(340, 440)  # Standard card with camera (larger camera preview)
+            self.setFixedSize(360, 480)  # Standard card with camera (larger for T1-T3)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(4)
@@ -1278,8 +1279,10 @@ class PrinterCard(QFrame):
         header.addWidget(self.status_indicator)
         
         self.name_label = QLabel(self.config.name or self.config.host)
-        self.name_label.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        self.name_label.setFont(QFont("Play", 12, QFont.Weight.Bold))  # Slightly smaller font
         self.name_label.setStyleSheet(f"color: {COLORS['accent']};")
+        self.name_label.setMaximumWidth(180 if self.compact_mode else 220)  # Limit width
+        self.name_label.setToolTip(self.config.name or self.config.host)  # Full name in tooltip
         header.addWidget(self.name_label)
         header.addStretch()
         
@@ -1346,12 +1349,13 @@ class PrinterCard(QFrame):
         self.ext_label = QLabel("Extruder")
         self.ext_label.setFont(QFont("Play", 9))
         self.ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.ext_label.setFixedWidth(65)
+        self.ext_label.setFixedWidth(55)  # Reduced width
         ext_row.addWidget(self.ext_label)
         
         self.ext_temp_label = QLabel("--°C / --°C")
         self.ext_temp_label.setFont(QFont("Play", 10))
         self.ext_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.ext_temp_label.setMinimumWidth(120)  # Ensure enough space for temps
         ext_row.addWidget(self.ext_temp_label)
         
         self.temp_layout.addLayout(ext_row)
@@ -1370,12 +1374,13 @@ class PrinterCard(QFrame):
             label = QLabel(f"T{i}")
             label.setFont(QFont("Play", 9))
             label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-            label.setFixedWidth(65)
+            label.setFixedWidth(55)  # Reduced width
             row.addWidget(label)
             
             temp_label = QLabel("--°C / --°C")
             temp_label.setFont(QFont("Play", 10))
             temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            temp_label.setMinimumWidth(120)  # Ensure enough space for temps
             row.addWidget(temp_label)
             
             # Create a container widget for the row
@@ -1405,12 +1410,13 @@ class PrinterCard(QFrame):
         chamber_label = QLabel("Chamber")
         chamber_label.setFont(QFont("Play", 9))
         chamber_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        chamber_label.setFixedWidth(65)
+        chamber_label.setFixedWidth(55)  # Reduced width
         chamber_row.addWidget(chamber_label)
         
         self.chamber_temp_label = QLabel("--°C")
         self.chamber_temp_label.setFont(QFont("Play", 10))
         self.chamber_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.chamber_temp_label.setMinimumWidth(120)  # Ensure enough space for temps
         chamber_row.addWidget(self.chamber_temp_label)
         
         self.temp_layout.addLayout(chamber_row)
@@ -1434,12 +1440,13 @@ class PrinterCard(QFrame):
         bed_label = QLabel("Bed")
         bed_label.setFont(QFont("Play", 9))
         bed_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        bed_label.setFixedWidth(65)
+        bed_label.setFixedWidth(55)  # Reduced width
         bed_row.addWidget(bed_label)
         
         self.bed_temp_label = QLabel("--°C / --°C")
         self.bed_temp_label.setFont(QFont("Play", 10))
         self.bed_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.bed_temp_label.setMinimumWidth(120)  # Ensure enough space for temps
         bed_row.addWidget(self.bed_temp_label)
         
         self.temp_layout.addLayout(bed_row)
@@ -1677,32 +1684,40 @@ class PrinterCard(QFrame):
     
     def _on_login_click(self):
         """Show login dialog for authentication"""
-        dialog = LoginDialog(self.config.host, self.config.port, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            username, password = dialog.get_credentials()
-            # Update config with credentials
-            self.config.username = username
-            self.config.password = password
-            # Emit signal to save config and refresh
-            self.login_btn.setVisible(False)
-            # Trigger refresh with new credentials
-            if self.client:
-                self.client.username = username
-                self.client.password = password
-                self.client._token = None  # Clear old token
-                if self.client._session:
-                    import asyncio
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            asyncio.ensure_future(self.client._session.close())
-                        else:
-                            loop.run_until_complete(self.client._session.close())
-                    except:
-                        pass
-                    self.client._session = None
-            # Emit signal to trigger status refresh
-            self.login_requested.emit(self)
+        print(f"Login button clicked for {self.config.host}:{self.config.port}")
+        try:
+            dialog = LoginDialog(self.config.host, self.config.port, self)
+            result = dialog.exec()
+            print(f"Dialog result: {result}")
+            if result == QDialog.DialogCode.Accepted:
+                username, password = dialog.get_credentials()
+                # Update config with credentials
+                self.config.username = username
+                self.config.password = password
+                # Emit signal to save config and refresh
+                self.login_btn.setVisible(False)
+                # Trigger refresh with new credentials
+                if self.client:
+                    self.client.username = username
+                    self.client.password = password
+                    self.client._token = None  # Clear old token
+                    if self.client._session:
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                asyncio.ensure_future(self.client._session.close())
+                            else:
+                                loop.run_until_complete(self.client._session.close())
+                        except:
+                            pass
+                        self.client._session = None
+                # Emit signal to trigger status refresh
+                self.login_requested.emit(self)
+        except Exception as e:
+            print(f"Login dialog error: {e}")
+            import traceback
+            traceback.print_exc()
     
     def update_status(self, status: PrinterStatus):
         self.status = status
@@ -2259,13 +2274,14 @@ class StatsPanel(QFrame):
         shaper_btn_layout = QHBoxLayout()
         shaper_btn_layout.setSpacing(4)
         
-        self.shaper_calibrate_btn = QPushButton("Run SHAPER_CALIBRATE")
+        self.shaper_calibrate_btn = QPushButton("Calibrate")
         self.shaper_calibrate_btn.setFixedHeight(28)
+        self.shaper_calibrate_btn.setToolTip("Run SHAPER_CALIBRATE macro")
         self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
         self.shaper_calibrate_btn.setEnabled(False)
         shaper_btn_layout.addWidget(self.shaper_calibrate_btn)
         
-        self.save_shaper_graph_btn = QPushButton("Save Graph")
+        self.save_shaper_graph_btn = QPushButton("Graph")
         self.save_shaper_graph_btn.setFixedHeight(28)
         self.save_shaper_graph_btn.clicked.connect(self._save_shaper_graph)
         self.save_shaper_graph_btn.setEnabled(False)
@@ -3449,9 +3465,14 @@ class MainWindow(QMainWindow):
         self.update_workers: List[AsyncWorker] = []
         self.selected_printer: Optional[PrinterCard] = None
         self._startup_scan_done = False
+        self._last_print_states: Dict[str, str] = {}  # Track print states for notifications
         
         self._setup_ui()
         self._load_printers()
+        self._setup_system_tray()
+        
+        # Apply window settings
+        self._apply_window_settings()
         
         # Connect G-code request handler
         self.stats_panel.gcode_requested = self._send_gcode
@@ -3507,12 +3528,12 @@ class MainWindow(QMainWindow):
                 self.status_label.setText("No printers found on network")
             
             # Clear status after 5 seconds
-            QTimer.singleShot(5000, lambda: self.status_label.setText("Ready"))
+            QTimer.singleShot(5000, lambda: self.status_label.setText(""))
         
         def on_error(e):
             self.status_label.setText(f"Scan error: {e}")
             # Clear status after 5 seconds
-            QTimer.singleShot(5000, lambda: self.status_label.setText("Ready"))
+            QTimer.singleShot(5000, lambda: self.status_label.setText(""))
         
         worker = AsyncWorker(scan)
         worker.result_ready.connect(on_result)
@@ -3614,8 +3635,8 @@ class MainWindow(QMainWindow):
         
         # Right side - Stats panel (has internal scrolling)
         self.stats_panel = StatsPanel()
-        self.stats_panel.setMinimumWidth(300)
-        self.stats_panel.setMaximumWidth(350)
+        self.stats_panel.setMinimumWidth(320)
+        self.stats_panel.setMaximumWidth(400)
         splitter.addWidget(self.stats_panel)
         
         splitter.setSizes([900, 300])
@@ -3625,9 +3646,10 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter, 1)  # Give splitter stretch priority
         
         # Status bar
-        self.status_label = QLabel("Ready")
+        self.status_label = QLabel("")
         self.status_label.setFont(QFont("Play", 9))
         self.status_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        self.status_label.setFixedHeight(20)  # Prevent layout shift
         main_layout.addWidget(self.status_label)
     
     def _load_printers(self):
@@ -3762,11 +3784,12 @@ class MainWindow(QMainWindow):
         self.selected_printer = card
         card.set_selected(True)
         
-        # Update stats panel
+        # Update stats panel with this printer's info
         self.stats_panel.clear()
+        self.stats_panel.set_printer_config(card.config)  # Set config for G-code commands
         self.stats_panel.set_printer_name(card.config.name or card.config.host)
         self.stats_panel.update_stats(card.stats)
-        self.stats_panel.update_system_info(card.system_info)
+        self.stats_panel.update_system_info(card.system_info)  # Also updates MMU info
         
         # Set webcam URL
         if card.system_info.webcam_url:
