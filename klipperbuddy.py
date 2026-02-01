@@ -1310,7 +1310,7 @@ class PrinterCard(QFrame):
         """Setup timer for camera preview updates"""
         self._camera_timer = QTimer(self)
         self._camera_timer.timeout.connect(self._update_camera_preview)
-        self._camera_timer.start(5000)  # Update every 5 seconds (reduced for performance)
+        self._camera_timer.start(15000)  # Update every 15 seconds (reduced for performance)
     
     def _update_camera_preview(self):
         """Fetch and update camera preview image"""
@@ -1445,36 +1445,36 @@ class PrinterCard(QFrame):
         
         self.temp_layout.addLayout(ext_row)
         
-        # Multi-extruder rows (T1, T2, T3 - hidden by default)
-        self.multi_ext_rows = []
-        for i in range(1, 4):
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            
-            # Spacer for icon alignment
-            spacer = QLabel()
-            spacer.setFixedWidth(20)
-            row.addWidget(spacer)
-            
+        # Multi-extruder row (T1, T2, T3 shown horizontally - hidden by default)
+        self.multi_ext_row_widget = QWidget()
+        multi_ext_layout = QHBoxLayout(self.multi_ext_row_widget)
+        multi_ext_layout.setContentsMargins(20, 0, 0, 0)  # Indent to align with other rows
+        multi_ext_layout.setSpacing(4)
+        
+        self.multi_ext_labels = []  # List of (label, temp_label) tuples
+        for i in range(1, 6):  # Support up to T5
             label = QLabel(f"T{i}")
-            label.setFont(QFont("Play", 9))
+            label.setFont(QFont("Play", 8))
             label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-            label.setFixedWidth(55)  # Reduced width
-            row.addWidget(label)
+            multi_ext_layout.addWidget(label)
             
-            temp_label = QLabel("--°C / --°C")
-            temp_label.setFont(QFont("Play", 10))
-            temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            temp_label.setMinimumWidth(120)  # Ensure enough space for temps
-            row.addWidget(temp_label)
+            temp_label = QLabel("--°C")
+            temp_label.setFont(QFont("Play", 8))
+            temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+            multi_ext_layout.addWidget(temp_label)
             
-            # Create a container widget for the row
-            row_widget = QWidget()
-            row_widget.setLayout(row)
-            row_widget.setVisible(False)
-            self.temp_layout.addWidget(row_widget)
+            # Add separator except for last
+            if i < 5:
+                sep = QLabel("|")
+                sep.setFont(QFont("Play", 8))
+                sep.setStyleSheet(f"color: {COLORS['text_muted']};")
+                multi_ext_layout.addWidget(sep)
             
-            self.multi_ext_rows.append((row_widget, label, temp_label))
+            self.multi_ext_labels.append((label, temp_label))
+        
+        multi_ext_layout.addStretch()
+        self.multi_ext_row_widget.setVisible(False)
+        self.temp_layout.addWidget(self.multi_ext_row_widget)
         
         # Chamber row
         chamber_row = QHBoxLayout()
@@ -1542,9 +1542,10 @@ class PrinterCard(QFrame):
         layout.addSpacing(8)
         
         self.filename_label = QLabel("No active print")
-        self.filename_label.setFont(QFont("Play", 10))
+        self.filename_label.setFont(QFont("Play", 9 if self.compact_mode else 10))
         self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.filename_label.setWordWrap(True)
+        self.filename_label.setWordWrap(False)  # Disable word wrap to prevent overflow
+        self.filename_label.setMaximumWidth(200 if self.compact_mode else 300)
         layout.addWidget(self.filename_label)
         
         # Progress bar
@@ -1855,35 +1856,45 @@ class PrinterCard(QFrame):
             self.ext_label.setText("T0")
             self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
             
-            # Show additional extruders (T1, T2, T3)
-            for i, (row_widget, label, temp_label) in enumerate(self.multi_ext_rows):
-                if i + 1 < status.extruder_count:
-                    row_widget.setVisible(True)
-                    current, target = status.extruder_temps[i + 1]
-                    temp_label.setText(f"{current:.1f}°C / {target:.0f}°C")
+            # Show additional extruders horizontally (T1, T2, T3, etc.)
+            self.multi_ext_row_widget.setVisible(True)
+            for i, (label, temp_label) in enumerate(self.multi_ext_labels):
+                ext_idx = i + 1  # T1 = index 1, T2 = index 2, etc.
+                if ext_idx < status.extruder_count:
+                    label.setVisible(True)
+                    temp_label.setVisible(True)
+                    current, target = status.extruder_temps[ext_idx]
+                    if target > 0:
+                        temp_label.setText(f"{current:.0f}/{target:.0f}°C")
+                    else:
+                        temp_label.setText(f"{current:.0f}°C")
                 else:
-                    row_widget.setVisible(False)
+                    label.setVisible(False)
+                    temp_label.setVisible(False)
         else:
-            # Single extruder - hide multi-extruder rows
+            # Single extruder - hide multi-extruder row
             self.ext_label.setText("Extruder")
             self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
-            for row_widget, label, temp_label in self.multi_ext_rows:
-                row_widget.setVisible(False)
+            self.multi_ext_row_widget.setVisible(False)
         
         self.bed_temp_label.setText(f"{status.bed_temp:.1f}°C / {status.bed_target:.0f}°C")
         self.chamber_temp_label.setText(f"{status.chamber_temp:.1f}°C" if status.chamber_temp > 0 else "--°C")
         
         # Update print info
         if status.filename:
-            # Truncate filename if too long
+            # Truncate filename if too long (shorter for compact mode)
             fn = status.filename
-            if len(fn) > 35:
-                fn = fn[:32] + "..."
+            max_len = 20 if self.compact_mode else 35
+            if len(fn) > max_len:
+                fn = fn[:max_len-3] + "..."
             self.filename_label.setText(fn)
+            self.filename_label.setToolTip(status.filename)  # Full name in tooltip
             self.filename_label.setStyleSheet(f"color: {COLORS['text_primary']};")
         else:
             self.filename_label.setText("No active print")
+            self.filename_label.setToolTip("")
             self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        
         
         # Update progress
         self.progress_bar.setValue(int(status.progress))
@@ -2475,6 +2486,10 @@ class StatsPanel(QFrame):
                 background-color: {COLORS['accent']};
                 color: {COLORS['bg_dark']};
             }}
+            QPushButton:disabled {{
+                color: {COLORS['text_muted']};
+                border-color: {COLORS['text_muted']};
+            }}
         """)
         self.analyze_log_btn.clicked.connect(self._analyze_log)
         self.analyze_log_btn.setEnabled(False)
@@ -2483,6 +2498,22 @@ class StatsPanel(QFrame):
         # Download Log button
         self.download_log_btn = QPushButton("💾 Download Log")
         self.download_log_btn.setFixedHeight(28)
+        self.download_log_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['text_secondary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['bg_hover']};
+                color: {COLORS['text_primary']};
+            }}
+            QPushButton:disabled {{
+                color: {COLORS['text_muted']};
+                border-color: {COLORS['text_muted']};
+            }}
+        """)
         self.download_log_btn.clicked.connect(self._download_log)
         self.download_log_btn.setEnabled(False)
         log_layout.addWidget(self.download_log_btn)
@@ -2549,6 +2580,10 @@ class StatsPanel(QFrame):
                 background-color: {COLORS['accent']};
                 color: {COLORS['bg_dark']};
             }}
+            QPushButton:disabled {{
+                color: {COLORS['text_muted']};
+                border-color: {COLORS['text_muted']};
+            }}
         """)
         self.backup_config_btn.clicked.connect(self._backup_configs)
         self.backup_config_btn.setEnabled(False)
@@ -2613,7 +2648,7 @@ class StatsPanel(QFrame):
         self.current_webcam_url = url
         self.open_camera_btn.setEnabled(True)
         # Start camera refresh
-        self.camera_timer.start(2000)  # Refresh every 2 seconds
+        self.camera_timer.start(5000)  # Refresh every 5 seconds (reduced for performance)
         self._refresh_camera()  # Immediate first refresh
     
     def set_printer_name(self, name: str):
@@ -3713,7 +3748,7 @@ class MainWindow(QMainWindow):
         # Auto-refresh timer (lightweight updates only)
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(lambda: self._refresh_all_status(full_refresh=False))
-        self.refresh_timer.start(3000)  # Refresh every 3 seconds
+        self.refresh_timer.start(5000)  # Refresh every 5 seconds (reduced for performance)
     
     def showEvent(self, event):
         """Run auto-scan on first show"""
@@ -4033,8 +4068,10 @@ class MainWindow(QMainWindow):
     
     def _refresh_all_status(self, full_refresh: bool = True):
         """Refresh all printers. full_refresh=True on startup/manual refresh."""
-        for key, card in self.printer_cards.items():
-            self._refresh_printer_status(card, full_refresh=full_refresh)
+        # Stagger updates to avoid overwhelming the network
+        for i, (key, card) in enumerate(self.printer_cards.items()):
+            # Delay each printer's update by 500ms to spread the load
+            QTimer.singleShot(i * 500, lambda c=card, fr=full_refresh: self._refresh_printer_status(c, full_refresh=fr))
     
     def _refresh_printer_status(self, card: PrinterCard, full_refresh: bool = False):
         """Refresh printer status. full_refresh=True fetches all info including name/system info."""
