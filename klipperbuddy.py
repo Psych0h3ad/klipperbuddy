@@ -2054,7 +2054,8 @@ class StatsPanel(QFrame):
         layout.addLayout(cam_header)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(180)  # Increased from 100 for larger camera preview
+        # Camera preview size: 180px height for better visibility
+        self.camera_frame.setFixedHeight(180)
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
