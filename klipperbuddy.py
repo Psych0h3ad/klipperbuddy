@@ -4,6 +4,9 @@ Inspired by Bambuddy (https://github.com/maziggy/bambuddy)
 
 Design: Black theme with Tiffany Blue (#0ABAB5) accents
 Font: Play (OFL License) for UI, ToaHI for title logo (image)
+
+P3D Logo: Copyright (c) Yuto Horiuchi (YuTR0N/Psych0h3ad)
+          All rights reserved. Unauthorized use prohibited.
 """
 
 import sys
@@ -2051,7 +2054,7 @@ class StatsPanel(QFrame):
         layout.addLayout(cam_header)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(100)
+        self.camera_frame.setFixedHeight(180)  # Increased from 100 for larger camera preview
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
@@ -2067,7 +2070,7 @@ class StatsPanel(QFrame):
         self.camera_image.setStyleSheet(f"color: {COLORS['text_muted']};")
         self.camera_image.setFont(QFont("Play", 9))
         self.camera_image.setText("Click a printer to view camera")
-        self.camera_image.setMinimumHeight(80)
+        self.camera_image.setMinimumHeight(140)  # Increased from 80
         cam_layout.addWidget(self.camera_image)
         
         self.open_camera_btn = QPushButton("Open in Browser")
@@ -2995,12 +2998,14 @@ class StatsPanel(QFrame):
     
     def enable_controls(self, enabled: bool = True):
         """Enable or disable printer control buttons"""
+        print(f"[DEBUG] enable_controls called with enabled={enabled}")
         self.firmware_restart_btn.setEnabled(enabled)
         self.restart_btn.setEnabled(enabled)
         self.emergency_stop_btn.setEnabled(enabled)
         self.analyze_log_btn.setEnabled(enabled)
         self.download_log_btn.setEnabled(enabled)
         self.backup_config_btn.setEnabled(enabled)
+        print(f"[DEBUG] analyze_log_btn.isEnabled()={self.analyze_log_btn.isEnabled()}")
     
     def _firmware_restart(self):
         """Send FIRMWARE_RESTART command"""
@@ -3821,12 +3826,14 @@ class MainWindow(QMainWindow):
         # Header
         header_layout = QHBoxLayout()
         
-        # P3D Logo
+        # P3D Logo - Copyright Yuto Horiuchi (YuTR0N/Psych0h3ad)
+        # All rights reserved. Unauthorized use prohibited.
         p3d_logo_path = resource_path("p3d_logo.png")
         if os.path.exists(p3d_logo_path):
             p3d_pixmap = QPixmap(p3d_logo_path)
             p3d_label = QLabel()
             p3d_label.setPixmap(p3d_pixmap.scaledToHeight(36, Qt.TransformationMode.SmoothTransformation))
+            p3d_label.setToolTip("P3D Logo © Yuto Horiuchi (YuTR0N). All rights reserved.")
             header_layout.addWidget(p3d_label)
         
         # KlipperBuddy title logo
@@ -4044,6 +4051,7 @@ class MainWindow(QMainWindow):
     
     def _on_card_clicked(self, card: PrinterCard):
         """Handle card selection"""
+        print(f"[DEBUG] Card clicked: {card.config.host}")
         # Deselect previous card
         if self.selected_printer and self.selected_printer != card:
             self.selected_printer.set_selected(False)
@@ -4055,6 +4063,7 @@ class MainWindow(QMainWindow):
         # Update stats panel with this printer's info
         self.stats_panel.clear()
         self.stats_panel.set_printer_config(card.config)  # Set config for G-code commands
+        print(f"[DEBUG] enable_controls called with config: {card.config is not None}")
         self.stats_panel.set_printer_name(card.config.name or card.config.host)
         self.stats_panel.update_stats(card.stats)
         self.stats_panel.update_system_info(card.system_info)  # Also updates MMU info
