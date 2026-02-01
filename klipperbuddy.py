@@ -2990,6 +2990,7 @@ class StatsPanel(QFrame):
         self.firmware_restart_btn.setEnabled(False)
         self.restart_btn.setEnabled(False)
         self.emergency_stop_btn.setEnabled(False)
+        self.backup_config_btn.setEnabled(False)
         # Clear MMU section
         self.mmu_section.setVisible(False)
         self.mmu_type_label.setText("--")
@@ -4147,6 +4148,8 @@ class MainWindow(QMainWindow):
                 if full_refresh and shaper_data:
                     self.stats_panel.update_input_shaper(shaper_data)
                 self.stats_panel.set_printer_config(card.config)
+                # Ensure controls are enabled when printer is selected
+                self.stats_panel.enable_controls(True)
                 
                 # Check for PID warning
                 self.stats_panel._check_pid_warning(
