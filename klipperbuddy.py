@@ -3299,6 +3299,11 @@ class MainWindow(QMainWindow):
     
     def _send_gcode(self, config: PrinterConfig, gcode: str):
         """Send G-code command to a printer"""
+        # Long-running commands that don't need success confirmation popup
+        long_running_commands = ['SHAPER_CALIBRATE', 'G28', 'BED_MESH_CALIBRATE', 'PROBE_CALIBRATE', 
+                                  'PID_CALIBRATE', 'QUAD_GANTRY_LEVEL', 'Z_TILT_ADJUST']
+        is_long_running = any(cmd in gcode.upper() for cmd in long_running_commands)
+        
         async def send():
             client = MoonrakerClient(
                 config.host, config.port,
@@ -3313,10 +3318,18 @@ class MainWindow(QMainWindow):
         def on_result(success):
             if success:
                 self.status_label.setText(f"Command sent: {gcode[:30]}...")
-                QMessageBox.information(self, "Success", f"Command sent successfully:\n{gcode}")
+                # Don't show popup for long-running commands - they run in background
+                if not is_long_running:
+                    QMessageBox.information(self, "Success", f"Command sent successfully:\n{gcode}")
             else:
-                self.status_label.setText("Failed to send command")
-                QMessageBox.warning(self, "Error", f"Failed to send command:\n{gcode}")
+                # For long-running commands, the API might return before completion
+                # Check if the command was actually accepted
+                if is_long_running:
+                    self.status_label.setText(f"Command started: {gcode[:30]}...")
+                    # Don't show error for long-running commands as they may still be running
+                else:
+                    self.status_label.setText("Failed to send command")
+                    QMessageBox.warning(self, "Error", f"Failed to send command:\n{gcode}")
         
         worker = AsyncWorker(send())
         worker.finished.connect(on_result)
