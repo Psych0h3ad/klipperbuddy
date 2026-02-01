@@ -1793,8 +1793,6 @@ class StatsPanel(QFrame):
         
         # Signal for G-code commands
         self.gcode_requested = None  # Will be set by MainWindow
-        
-        layout.addStretch()
     
     def _apply_style(self):
         self.setStyleSheet(f"""
@@ -1804,6 +1802,8 @@ class StatsPanel(QFrame):
                 border-radius: 8px;
             }}
         """)
+        # Set size policy to allow proper scrolling
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
     
     def _open_camera(self):
         if self.current_webcam_url:
