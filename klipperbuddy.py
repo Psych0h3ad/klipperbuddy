@@ -1338,8 +1338,8 @@ class StatsPanel(QFrame):
         # Content widget inside scroll area
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
         
         # Selected printer name
         self.printer_name_label = QLabel("Select a printer")
@@ -1355,8 +1355,8 @@ class StatsPanel(QFrame):
         layout.addWidget(graph_label)
         
         self.temp_chart = TemperatureChart()
-        self.temp_chart.setMinimumHeight(150)
-        self.temp_chart.setMaximumHeight(150)
+        self.temp_chart.setMinimumHeight(100)
+        self.temp_chart.setMaximumHeight(100)
         layout.addWidget(self.temp_chart)
         
         # Current temps display
@@ -1392,7 +1392,7 @@ class StatsPanel(QFrame):
         layout.addWidget(cam_label)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(140)
+        self.camera_frame.setFixedHeight(100)
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
@@ -1408,11 +1408,11 @@ class StatsPanel(QFrame):
         self.camera_image.setStyleSheet(f"color: {COLORS['text_muted']};")
         self.camera_image.setFont(QFont("Play", 9))
         self.camera_image.setText("Click a printer to view camera")
-        self.camera_image.setMinimumHeight(90)
+        self.camera_image.setMinimumHeight(60)
         cam_layout.addWidget(self.camera_image)
         
         self.open_camera_btn = QPushButton("Open in Browser")
-        self.open_camera_btn.setFixedHeight(28)
+        self.open_camera_btn.setFixedHeight(24)
         self.open_camera_btn.setEnabled(False)
         self.open_camera_btn.clicked.connect(self._open_camera)
         cam_layout.addWidget(self.open_camera_btn)
@@ -1439,7 +1439,7 @@ class StatsPanel(QFrame):
         layout.addWidget(stats_label)
         
         stats_grid = QGridLayout()
-        stats_grid.setSpacing(8)
+        stats_grid.setSpacing(4)
         
         # Total Print Time
         stats_grid.addWidget(QLabel("Total Print Time:"), 0, 0)
@@ -1610,8 +1610,8 @@ class StatsPanel(QFrame):
         """)
         self.pid_warning_frame.setVisible(False)
         pid_warning_layout = QVBoxLayout(self.pid_warning_frame)
-        pid_warning_layout.setContentsMargins(8, 8, 8, 8)
-        pid_warning_layout.setSpacing(4)
+        pid_warning_layout.setContentsMargins(6, 6, 6, 6)
+        pid_warning_layout.setSpacing(2)
         
         self.pid_warning_label = QLabel("⚠️ Temperature fluctuation detected")
         self.pid_warning_label.setFont(QFont("Play", 9))
@@ -1621,12 +1621,12 @@ class StatsPanel(QFrame):
         
         pid_btn_layout = QHBoxLayout()
         self.pid_hotend_btn = QPushButton("PID Tune Hotend")
-        self.pid_hotend_btn.setFixedHeight(28)
+        self.pid_hotend_btn.setFixedHeight(24)
         self.pid_hotend_btn.clicked.connect(lambda: self._run_pid_calibrate('extruder'))
         pid_btn_layout.addWidget(self.pid_hotend_btn)
         
         self.pid_bed_btn = QPushButton("PID Tune Bed")
-        self.pid_bed_btn.setFixedHeight(28)
+        self.pid_bed_btn.setFixedHeight(24)
         self.pid_bed_btn.clicked.connect(lambda: self._run_pid_calibrate('heater_bed'))
         pid_btn_layout.addWidget(self.pid_bed_btn)
         pid_warning_layout.addLayout(pid_btn_layout)
@@ -1643,8 +1643,8 @@ class StatsPanel(QFrame):
             }}
         """)
         shaper_layout = QVBoxLayout(self.shaper_frame)
-        shaper_layout.setContentsMargins(8, 8, 8, 8)
-        shaper_layout.setSpacing(4)
+        shaper_layout.setContentsMargins(6, 6, 6, 6)
+        shaper_layout.setSpacing(2)
         
         shaper_title = QLabel("Input Shaper")
         shaper_title.setFont(QFont("Play", 10, QFont.Weight.Bold))
@@ -1669,7 +1669,7 @@ class StatsPanel(QFrame):
         shaper_layout.addLayout(shaper_grid)
         
         self.shaper_calibrate_btn = QPushButton("Run SHAPER_CALIBRATE")
-        self.shaper_calibrate_btn.setFixedHeight(28)
+        self.shaper_calibrate_btn.setFixedHeight(24)
         self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
         self.shaper_calibrate_btn.setEnabled(False)
         shaper_layout.addWidget(self.shaper_calibrate_btn)
@@ -1697,12 +1697,12 @@ class StatsPanel(QFrame):
             }}
         """)
         control_layout = QVBoxLayout(control_frame)
-        control_layout.setContentsMargins(8, 8, 8, 8)
-        control_layout.setSpacing(8)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(4)
         
         # Firmware Restart button
         self.firmware_restart_btn = QPushButton("🔄 FIRMWARE_RESTART")
-        self.firmware_restart_btn.setFixedHeight(32)
+        self.firmware_restart_btn.setFixedHeight(28)
         self.firmware_restart_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1722,7 +1722,7 @@ class StatsPanel(QFrame):
         
         # Restart button
         self.restart_btn = QPushButton("🔁 RESTART")
-        self.restart_btn.setFixedHeight(32)
+        self.restart_btn.setFixedHeight(28)
         self.restart_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1742,7 +1742,7 @@ class StatsPanel(QFrame):
         
         # Emergency Stop button
         self.emergency_stop_btn = QPushButton("🛑 EMERGENCY STOP")
-        self.emergency_stop_btn.setFixedHeight(36)
+        self.emergency_stop_btn.setFixedHeight(30)
         self.emergency_stop_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['error']};
@@ -1784,8 +1784,8 @@ class StatsPanel(QFrame):
             }}
         """)
         log_layout = QVBoxLayout(log_frame)
-        log_layout.setContentsMargins(8, 8, 8, 8)
-        log_layout.setSpacing(8)
+        log_layout.setContentsMargins(6, 6, 6, 6)
+        log_layout.setSpacing(4)
         
         # Log status
         self.log_status_label = QLabel("No log analyzed yet")
@@ -1809,7 +1809,7 @@ class StatsPanel(QFrame):
         
         # Analyze Log button
         self.analyze_log_btn = QPushButton("🔍 Analyze Log")
-        self.analyze_log_btn.setFixedHeight(32)
+        self.analyze_log_btn.setFixedHeight(26)
         self.analyze_log_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1829,7 +1829,7 @@ class StatsPanel(QFrame):
         
         # Download Log button
         self.download_log_btn = QPushButton("💾 Download Log")
-        self.download_log_btn.setFixedHeight(28)
+        self.download_log_btn.setFixedHeight(26)
         self.download_log_btn.clicked.connect(self._download_log)
         self.download_log_btn.setEnabled(False)
         log_layout.addWidget(self.download_log_btn)
