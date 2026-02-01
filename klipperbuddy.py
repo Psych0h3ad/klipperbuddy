@@ -250,6 +250,9 @@ class PrinterStatus:
     eta_seconds: float = 0.0
     software_version: str = ""
     last_update: float = 0.0
+    # Multi-extruder support (Snapmaker U1, etc.)
+    extruder_count: int = 1
+    extruder_temps: list = None  # [(current, target), ...] for each extruder
 
 
 @dataclass
@@ -587,17 +590,44 @@ class MoonrakerClient:
         status.state_message = result.get('state_message', '')
         status.software_version = result.get('software_version', '')
         
+        # First, check for available extruders (for multi-toolhead printers like Snapmaker U1)
+        extruder_count = 1
+        try:
+            objects_list = await self._request('GET', '/printer/objects/list')
+            if objects_list and 'result' in objects_list:
+                objects = objects_list['result'].get('objects', [])
+                # Count extruders (extruder, extruder1, extruder2, extruder3, etc.)
+                extruder_names = [obj for obj in objects if obj.startswith('extruder') and not 'stepper' in obj]
+                extruder_count = len(extruder_names)
+        except:
+            pass
+        
+        # Build query for all extruders
+        extruder_query = '&'.join([f'extruder{i}' if i > 0 else 'extruder' for i in range(extruder_count)])
+        
         # Get printer objects
         objects_resp = await self._request('GET', 
-            '/printer/objects/query?extruder&heater_bed&print_stats&display_status&'
+            f'/printer/objects/query?{extruder_query}&heater_bed&print_stats&display_status&'
             'heater_generic%20chamber_heater&temperature_sensor%20chamber')
         
         if objects_resp and 'result' in objects_resp:
             data = objects_resp['result'].get('status', {})
             
+            # Get primary extruder (extruder)
             ext = data.get('extruder', {})
             status.extruder_temp = ext.get('temperature', 0.0)
             status.extruder_target = ext.get('target', 0.0)
+            
+            # Get all extruder temperatures for multi-toolhead printers
+            status.extruder_count = extruder_count
+            if extruder_count > 1:
+                status.extruder_temps = []
+                for i in range(extruder_count):
+                    ext_name = f'extruder{i}' if i > 0 else 'extruder'
+                    ext_data = data.get(ext_name, {})
+                    current = ext_data.get('temperature', 0.0)
+                    target = ext_data.get('target', 0.0)
+                    status.extruder_temps.append((current, target))
             
             bed = data.get('heater_bed', {})
             status.bed_temp = bed.get('temperature', 0.0)
@@ -1108,10 +1138,19 @@ class TemperatureChart(QWidget):
 # =============================================================================
 
 class PrinterCard(QFrame):
-    """Cyberpunk-style printer status card"""
+    """Cyberpunk-style printer status card with state-based border colors"""
     
     camera_clicked = pyqtSignal(str)  # webcam_url
     card_clicked = pyqtSignal(object)  # self - emitted when card is clicked
+    
+    # State-based border colors
+    STATE_COLORS = {
+        'ready': '#00ff88',      # Green
+        'printing': '#0ABAB5',   # Tiffany Blue
+        'paused': '#ffaa00',     # Orange
+        'error': '#ff4444',      # Red
+        'offline': '#555555',    # Gray
+    }
     
     def __init__(self, config: PrinterConfig, parent=None):
         super().__init__(parent)
@@ -1121,20 +1160,21 @@ class PrinterCard(QFrame):
         self.system_info = SystemInfo()
         self.client: Optional[MoonrakerClient] = None
         self._selected = False
+        self._current_state = 'offline'
         self._setup_ui()
         self._apply_style()
     
     def _setup_ui(self):
-        self.setFixedSize(340, 320)
+        self.setFixedSize(380, 420)  # Larger card for camera preview
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
         
         # Header with name and status indicator
         header = QHBoxLayout()
         
         self.status_indicator = QLabel("●")
-        self.status_indicator.setFont(QFont("Arial", 12))
+        self.status_indicator.setFont(QFont("Arial", 14))
         header.addWidget(self.status_indicator)
         
         self.name_label = QLabel(self.config.name or self.config.host)
@@ -1149,75 +1189,120 @@ class PrinterCard(QFrame):
         
         layout.addLayout(header)
         
+        # Camera preview section
+        self.camera_frame = QFrame()
+        self.camera_frame.setFixedHeight(120)
+        self.camera_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: #0a0a0a;
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+        """)
+        camera_layout = QVBoxLayout(self.camera_frame)
+        camera_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.camera_preview = QLabel("No Camera")
+        self.camera_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+        self.camera_preview.setScaledContents(True)
+        camera_layout.addWidget(self.camera_preview)
+        
+        layout.addWidget(self.camera_frame)
+        
         # Separator line
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet(f"background-color: {COLORS['accent']}; max-height: 1px;")
+        line.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
         layout.addWidget(line)
         
         # Temperature section
         temp_layout = QGridLayout()
-        temp_layout.setSpacing(4)
+        temp_layout.setSpacing(3)
         
-        # Extruder
+        # Extruder (or multi-extruder label)
         ext_icon = QLabel()
-        ext_icon_path = resource_path("icons/icon_hotend.png")
+        ext_icon_path = resource_path("icons/hotend.svg")
         if os.path.exists(ext_icon_path):
             ext_pixmap = QPixmap(ext_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             ext_icon.setPixmap(ext_pixmap)
         else:
-            ext_icon.setText("🔥")
-            ext_icon.setFont(QFont("Segoe UI Emoji", 14))
-        ext_icon.setFixedSize(24, 24)
+            ext_icon.setText("●")
+            ext_icon.setStyleSheet(f"color: {COLORS['temp_hotend']};")
+            ext_icon.setFont(QFont("Arial", 14))
+        ext_icon.setFixedSize(22, 22)
         temp_layout.addWidget(ext_icon, 0, 0)
         
-        ext_label = QLabel("Extruder")
-        ext_label.setFont(QFont("Play", 10))
-        ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        temp_layout.addWidget(ext_label, 0, 1)
+        self.ext_label = QLabel("Extruder")
+        self.ext_label.setFont(QFont("Play", 9))
+        self.ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_layout.addWidget(self.ext_label, 0, 1)
         
         self.ext_temp_label = QLabel("--°C / --°C")
-        self.ext_temp_label.setFont(QFont("Play", 11))
+        self.ext_temp_label.setFont(QFont("Play", 10))
         self.ext_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         temp_layout.addWidget(self.ext_temp_label, 0, 2)
         
-        # Bed
+        # Multi-extruder labels (hidden by default, shown for multi-toolhead printers)
+        self.multi_ext_labels = []
+        for i in range(1, 4):  # Support up to 4 extruders (extruder1, extruder2, extruder3)
+            ext_label = QLabel(f"T{i}")
+            ext_label.setFont(QFont("Play", 9))
+            ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+            ext_label.setVisible(False)
+            temp_layout.addWidget(ext_label, i, 1)
+            
+            ext_temp = QLabel("--°C / --°C")
+            ext_temp.setFont(QFont("Play", 10))
+            ext_temp.setAlignment(Qt.AlignmentFlag.AlignRight)
+            ext_temp.setVisible(False)
+            temp_layout.addWidget(ext_temp, i, 2)
+            
+            self.multi_ext_labels.append((ext_label, ext_temp))
+        
+        # Bed (row index depends on extruder count, start at row 1 for single extruder)
         bed_icon = QLabel()
-        bed_icon_path = resource_path("icons/icon_bed.png")
+        bed_icon_path = resource_path("icons/bed.svg")
         if os.path.exists(bed_icon_path):
             bed_pixmap = QPixmap(bed_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             bed_icon.setPixmap(bed_pixmap)
         else:
-            bed_icon.setText("🛏️")
-            bed_icon.setFont(QFont("Segoe UI Emoji", 14))
-        bed_icon.setFixedSize(24, 24)
-        temp_layout.addWidget(bed_icon, 1, 0)
+            bed_icon.setText("●")
+            bed_icon.setStyleSheet(f"color: {COLORS['temp_bed']};")
+            bed_icon.setFont(QFont("Arial", 14))
+        bed_icon.setFixedSize(22, 22)
+        self.bed_icon = bed_icon
+        temp_layout.addWidget(bed_icon, 4, 0)  # Row 4 to leave room for multi-extruders
         
         bed_label = QLabel("Bed")
-        bed_label.setFont(QFont("Play", 10))
+        bed_label.setFont(QFont("Play", 9))
         bed_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        temp_layout.addWidget(bed_label, 1, 1)
+        self.bed_label_widget = bed_label
+        temp_layout.addWidget(bed_label, 4, 1)
         
         self.bed_temp_label = QLabel("--°C / --°C")
-        self.bed_temp_label.setFont(QFont("Play", 11))
+        self.bed_temp_label.setFont(QFont("Play", 10))
         self.bed_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        temp_layout.addWidget(self.bed_temp_label, 1, 2)
+        temp_layout.addWidget(self.bed_temp_label, 4, 2)
         
         # Chamber
         chamber_icon = QLabel()
-        chamber_icon_path = resource_path("icons/icon_chamber.png")
+        chamber_icon_path = resource_path("icons/chamber.svg")
         if os.path.exists(chamber_icon_path):
             chamber_pixmap = QPixmap(chamber_icon_path).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             chamber_icon.setPixmap(chamber_pixmap)
         else:
-            chamber_icon.setText("📦")
-            chamber_icon.setFont(QFont("Segoe UI Emoji", 14))
-        chamber_icon.setFixedSize(24, 24)
-        temp_layout.addWidget(chamber_icon, 2, 0)
+            chamber_icon.setText("●")
+            chamber_icon.setStyleSheet(f"color: {COLORS['temp_chamber']};")
+            chamber_icon.setFont(QFont("Arial", 14))
+        chamber_icon.setFixedSize(22, 22)
+        self.chamber_icon = chamber_icon
+        temp_layout.addWidget(chamber_icon, 5, 0)
         
         chamber_label = QLabel("Chamber")
-        chamber_label.setFont(QFont("Play", 10))
+        chamber_label.setFont(QFont("Play", 9))
         chamber_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.chamber_label_widget = chamber_label
         temp_layout.addWidget(chamber_label, 2, 1)
         
         self.chamber_temp_label = QLabel("--°C")
@@ -1263,35 +1348,64 @@ class PrinterCard(QFrame):
         
         layout.addStretch()
         
-        # Action buttons
+        # Action buttons - larger and more visible
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        btn_layout.setSpacing(10)
         
+        # Camera button
         self.camera_btn = QPushButton()
-        camera_icon_path = resource_path("icons/icon_camera.png")
-        if os.path.exists(camera_icon_path):
-            self.camera_btn.setIcon(QIcon(camera_icon_path))
-        else:
-            self.camera_btn.setText("📷")
-        self.camera_btn.setFixedSize(40, 32)
+        self.camera_btn.setIcon(get_icon("camera"))
+        self.camera_btn.setIconSize(QPixmap(24, 24).size())
+        self.camera_btn.setFixedSize(48, 36)
         self.camera_btn.setToolTip("View Camera")
+        self.camera_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
         self.camera_btn.clicked.connect(self._on_camera_click)
         btn_layout.addWidget(self.camera_btn)
         
+        # Graph button
         self.graph_btn = QPushButton()
-        graph_icon_path = resource_path("icons/icon_graph.png")
-        if os.path.exists(graph_icon_path):
-            self.graph_btn.setIcon(QIcon(graph_icon_path))
-        else:
-            self.graph_btn.setText("📈")
-        self.graph_btn.setFixedSize(40, 32)
+        self.graph_btn.setIcon(get_icon("graph"))
+        self.graph_btn.setIconSize(QPixmap(24, 24).size())
+        self.graph_btn.setFixedSize(48, 36)
         self.graph_btn.setToolTip("Temperature Graph")
+        self.graph_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
         self.graph_btn.clicked.connect(self._on_graph_click)
         btn_layout.addWidget(self.graph_btn)
         
-        self.web_btn = QPushButton("🌐")
-        self.web_btn.setFixedSize(40, 32)
+        # Web button
+        self.web_btn = QPushButton()
+        self.web_btn.setIcon(get_icon("web"))
+        self.web_btn.setIconSize(QPixmap(24, 24).size())
+        self.web_btn.setFixedSize(48, 36)
         self.web_btn.setToolTip("Open Web Interface")
+        self.web_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
         self.web_btn.clicked.connect(self._on_web_click)
         btn_layout.addWidget(self.web_btn)
         
@@ -1305,39 +1419,50 @@ class PrinterCard(QFrame):
         layout.addWidget(self.host_label)
     
     def _apply_style(self, selected: bool = False):
+        # Get border color based on printer state
+        state_color = self.STATE_COLORS.get(self._current_state, COLORS['border'])
+        
         if selected:
+            # Selected: thick border with state color + strong glow
             self.setStyleSheet(f"""
                 PrinterCard {{
-                    background-color: {COLORS['bg_card']};
-                    border: 2px solid {COLORS['accent']};
-                    border-radius: 8px;
+                    background-color: #1a1a1a;
+                    border: 3px solid {state_color};
+                    border-radius: 10px;
                 }}
             """)
             shadow = QGraphicsDropShadowEffect()
-            shadow.setBlurRadius(25)
-            shadow.setColor(QColor(COLORS['accent']))
+            shadow.setBlurRadius(40)
+            shadow.setColor(QColor(state_color))
             shadow.setOffset(0, 0)
             self.setGraphicsEffect(shadow)
         else:
+            # Not selected: thin border with state color + subtle glow
             self.setStyleSheet(f"""
                 PrinterCard {{
                     background-color: {COLORS['bg_card']};
-                    border: 1px solid {COLORS['border']};
+                    border: 2px solid {state_color};
                     border-radius: 8px;
                 }}
                 PrinterCard:hover {{
-                    border-color: {COLORS['accent']};
+                    background-color: #1a1a1a;
                 }}
             """)
             shadow = QGraphicsDropShadowEffect()
             shadow.setBlurRadius(15)
-            shadow.setColor(QColor(COLORS['accent']))
+            shadow.setColor(QColor(state_color))
             shadow.setOffset(0, 0)
             self.setGraphicsEffect(shadow)
     
     def set_selected(self, selected: bool):
         self._selected = selected
         self._apply_style(selected)
+        # Also update name label style for selected state
+        if selected:
+            self.name_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px;")
+        else:
+            self.name_label.setStyleSheet(f"color: {COLORS['accent']};")
+            self.name_label.setFont(QFont("Play", 14, QFont.Weight.Bold))
     
     def mousePressEvent(self, event):
         """Handle card click to select this printer"""
@@ -1362,6 +1487,12 @@ class PrinterCard(QFrame):
     def update_status(self, status: PrinterStatus):
         self.status = status
         
+        # Update state and re-apply style if state changed
+        old_state = self._current_state
+        self._current_state = status.state
+        if old_state != status.state:
+            self._apply_style(self._selected)
+        
         # Update state indicator
         state_colors = {
             'ready': COLORS['success'],
@@ -1376,7 +1507,30 @@ class PrinterCard(QFrame):
         self.state_label.setStyleSheet(f"color: {color};")
         
         # Update temperatures
-        self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
+        # Handle multi-extruder printers (like Snapmaker U1 with 4 toolheads)
+        if status.extruder_count > 1 and status.extruder_temps:
+            # Show T0 for first extruder
+            self.ext_label.setText("T0")
+            self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
+            
+            # Show additional extruders (T1, T2, T3)
+            for i, (label, temp_label) in enumerate(self.multi_ext_labels):
+                if i + 1 < status.extruder_count:
+                    label.setVisible(True)
+                    temp_label.setVisible(True)
+                    current, target = status.extruder_temps[i + 1]
+                    temp_label.setText(f"{current:.1f}°C / {target:.0f}°C")
+                else:
+                    label.setVisible(False)
+                    temp_label.setVisible(False)
+        else:
+            # Single extruder - hide multi-extruder labels
+            self.ext_label.setText("Extruder")
+            self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
+            for label, temp_label in self.multi_ext_labels:
+                label.setVisible(False)
+                temp_label.setVisible(False)
+        
         self.bed_temp_label.setText(f"{status.bed_temp:.1f}°C / {status.bed_target:.0f}°C")
         self.chamber_temp_label.setText(f"{status.chamber_temp:.1f}°C" if status.chamber_temp > 0 else "--°C")
         
@@ -2315,6 +2469,7 @@ class StatsPanel(QFrame):
         """Set current printer config for G-code commands"""
         self._current_printer_config = config
         self.shaper_calibrate_btn.setEnabled(config is not None)
+        self.enable_controls(config is not None)
     
     def clear(self):
         self.temp_chart.clear_data()
