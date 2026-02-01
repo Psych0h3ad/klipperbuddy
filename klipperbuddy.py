@@ -540,6 +540,25 @@ class MoonrakerClient:
         except:
             pass
         
+        # Try to get printer model from Klipper config (printer section)
+        try:
+            resp = await self._request('GET', '/printer/objects/query?configfile')
+            if resp and 'result' in resp:
+                status = resp['result'].get('status', {})
+                configfile = status.get('configfile', {})
+                config = configfile.get('config', {})
+                # Check for printer section with model info
+                printer_section = config.get('printer', {})
+                # Some printers store model in kinematics or other fields
+                # Check for mcu section which might have board info
+                mcu = config.get('mcu', {})
+                serial = mcu.get('serial', '')
+                # Snapmaker U1 might have identifiable serial pattern
+                if 'snapmaker' in serial.lower():
+                    return 'Snapmaker U1'
+        except:
+            pass
+        
         # Try to get machine info from Moonraker
         try:
             resp = await self._request('GET', '/machine/system_info')
@@ -548,10 +567,29 @@ class MoonrakerClient:
                 # Try to get model from distribution info
                 dist_info = system_info.get('distribution', {})
                 dist_id = dist_info.get('id', '')
+                # Check for Snapmaker
+                if 'snapmaker' in dist_id.lower():
+                    return 'Snapmaker U1'
                 # QIDI printers often have specific identifiers
                 if 'qidi' in dist_id.lower():
-                    # Try to extract model from hostname or other sources
                     pass
+                # Check CPU info for Snapmaker
+                cpu_info = system_info.get('cpu_info', {})
+                model = cpu_info.get('model', '')
+                if 'snapmaker' in model.lower():
+                    return 'Snapmaker U1'
+        except:
+            pass
+        
+        # Try to detect Snapmaker by checking for multiple extruders (4 toolheads)
+        try:
+            resp = await self._request('GET', '/printer/objects/list')
+            if resp and 'result' in resp:
+                objects = resp['result'].get('objects', [])
+                extruder_count = len([obj for obj in objects if obj.startswith('extruder') and 'stepper' not in obj])
+                # Snapmaker U1 has 4 extruders
+                if extruder_count == 4:
+                    return 'Snapmaker U1'
         except:
             pass
         
@@ -1175,9 +1213,10 @@ class PrinterCard(QFrame):
         'offline': '#555555',    # Gray
     }
     
-    def __init__(self, config: PrinterConfig, parent=None):
+    def __init__(self, config: PrinterConfig, compact_mode: bool = False, parent=None):
         super().__init__(parent)
         self.config = config
+        self.compact_mode = compact_mode
         self.status = PrinterStatus()
         self.stats = PrinterStats()
         self.system_info = SystemInfo()
@@ -1188,7 +1227,8 @@ class PrinterCard(QFrame):
         self._camera_timer = None
         self._setup_ui()
         self._apply_style()
-        self._setup_camera_timer()
+        if not compact_mode:
+            self._setup_camera_timer()
     
     def _setup_camera_timer(self):
         """Setup timer for camera preview updates"""
@@ -1198,7 +1238,7 @@ class PrinterCard(QFrame):
     
     def _update_camera_preview(self):
         """Fetch and update camera preview image"""
-        if not self._camera_url:
+        if not self._camera_url or not self.camera_preview:
             return
         
         try:
@@ -1229,10 +1269,13 @@ class PrinterCard(QFrame):
             pass
     
     def _setup_ui(self):
-        self.setFixedSize(380, 420)  # Larger card for camera preview
+        if self.compact_mode:
+            self.setFixedSize(190, 280)  # Compact card without camera
+        else:
+            self.setFixedSize(340, 380)  # Standard card with camera (adjusted height)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(4)
         
         # Header with name and status indicator
         header = QHBoxLayout()
@@ -1253,26 +1296,31 @@ class PrinterCard(QFrame):
         
         layout.addLayout(header)
         
-        # Camera preview section
-        self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(120)
-        self.camera_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: #0a0a0a;
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-        """)
-        camera_layout = QVBoxLayout(self.camera_frame)
-        camera_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.camera_preview = QLabel("No Camera")
-        self.camera_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        self.camera_preview.setScaledContents(True)
-        camera_layout.addWidget(self.camera_preview)
-        
-        layout.addWidget(self.camera_frame)
+        # Camera preview section (only in standard mode)
+        if not self.compact_mode:
+            self.camera_frame = QFrame()
+            # 16:9 aspect ratio: width 316 (340-24 margins) -> height ~178, use 100 for compact
+            self.camera_frame.setFixedHeight(100)
+            self.camera_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: #0a0a0a;
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                }}
+            """)
+            camera_layout = QHBoxLayout(self.camera_frame)
+            camera_layout.setContentsMargins(0, 0, 0, 0)
+            camera_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            self.camera_preview = QLabel("No Camera")
+            self.camera_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.camera_preview.setScaledContents(False)  # Maintain aspect ratio
+            self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+            camera_layout.addWidget(self.camera_preview)
+            layout.addWidget(self.camera_frame)
+        else:
+            self.camera_frame = None
+            self.camera_preview = None
         
         # Separator line
         line = QFrame()
@@ -1502,6 +1550,27 @@ class PrinterCard(QFrame):
         self.web_btn.clicked.connect(self._on_web_click)
         btn_layout.addWidget(self.web_btn)
         
+        # Login button (hidden by default, shown when auth required)
+        self.login_btn = QPushButton("🔐")
+        self.login_btn.setFixedSize(48, 36)
+        self.login_btn.setToolTip("Login Required")
+        self.login_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid #ff8800;
+                border-radius: 4px;
+                color: #ff8800;
+                font-size: 16px;
+            }}
+            QPushButton:hover {{
+                background-color: #ff8800;
+                color: {COLORS['background']};
+            }}
+        """)
+        self.login_btn.clicked.connect(self._on_login_click)
+        self.login_btn.setVisible(False)  # Hidden by default
+        btn_layout.addWidget(self.login_btn)
+        
         btn_layout.addStretch()
         
         layout.addLayout(btn_layout)
@@ -1577,6 +1646,21 @@ class PrinterCard(QFrame):
         url = f"http://{self.config.host}"
         webbrowser.open(url)
     
+    def _on_login_click(self):
+        """Show login dialog for authentication"""
+        dialog = LoginDialog(self.config.host, self.config.port, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            username, password = dialog.get_credentials()
+            # Update config with credentials
+            self.config.username = username
+            self.config.password = password
+            # Emit signal to save config and refresh
+            self.login_btn.setVisible(False)
+            # Trigger refresh
+            if self.client:
+                self.client.username = username
+                self.client.password = password
+    
     def update_status(self, status: PrinterStatus):
         self.status = status
         
@@ -1614,6 +1698,12 @@ class PrinterCard(QFrame):
         # Show state message as tooltip if available
         if status.state_message:
             self.state_label.setToolTip(status.state_message)
+        
+        # Show/hide login button based on auth state
+        if status.state in ('unauthorized', 'forbidden'):
+            self.login_btn.setVisible(True)
+        else:
+            self.login_btn.setVisible(False)
         
         # Update temperatures
         # Handle multi-extruder printers (like Snapmaker U1 with 4 toolheads)
@@ -2931,6 +3021,82 @@ class ScanDialog(QDialog):
 
 
 # =============================================================================
+# Login Dialog
+# =============================================================================
+
+class LoginDialog(QDialog):
+    """Dialog for entering login credentials for a printer"""
+    
+    def __init__(self, host: str, port: int = 7125, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🔐 Login Required")
+        self.setFixedSize(350, 200)
+        self._setup_ui(f"{host}:{port}")
+    
+    def _setup_ui(self, printer_name: str):
+        layout = QFormLayout(self)
+        layout.setSpacing(12)
+        
+        header = QLabel(f"Login to {printer_name}")
+        header.setFont(QFont("Play", 14, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {COLORS['accent']};")
+        layout.addRow(header)
+        
+        desc = QLabel("This printer requires authentication.")
+        desc.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        layout.addRow(desc)
+        
+        self.username_edit = QLineEdit()
+        self.username_edit.setPlaceholderText("Username")
+        layout.addRow("Username:", self.username_edit)
+        
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_edit.setPlaceholderText("Password")
+        layout.addRow("Password:", self.password_edit)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+        
+        # Apply dark theme
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {COLORS['background']};
+            }}
+            QLabel {{
+                color: {COLORS['text_primary']};
+            }}
+            QLineEdit {{
+                background-color: {COLORS['surface']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            QLineEdit:focus {{
+                border-color: {COLORS['accent']};
+            }}
+            QPushButton {{
+                background-color: {COLORS['accent']};
+                color: {COLORS['background']};
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent_hover']};
+            }}
+        """)
+    
+    def get_credentials(self) -> tuple:
+        """Return (username, password) tuple"""
+        return (self.username_edit.text(), self.password_edit.text())
+
+
+# =============================================================================
 # Add Printer Dialog
 # =============================================================================
 
@@ -3071,6 +3237,21 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(scan_group)
         
+        # Display settings
+        display_group = QGroupBox("Display")
+        display_layout = QVBoxLayout(display_group)
+        
+        self.compact_mode_check = QCheckBox("Compact Mode (smaller cards without camera preview)")
+        self.compact_mode_check.setChecked(self.config_manager.get_setting('compact_mode', False))
+        display_layout.addWidget(self.compact_mode_check)
+        
+        compact_desc = QLabel("Compact mode shows more printers on screen but without camera preview")
+        compact_desc.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        compact_desc.setWordWrap(True)
+        display_layout.addWidget(compact_desc)
+        
+        layout.addWidget(display_group)
+        
         # Privacy mode setting
         privacy_group = QGroupBox("Privacy")
         privacy_layout = QVBoxLayout(privacy_group)
@@ -3199,6 +3380,7 @@ Categories=Utility;
         """Save settings and close dialog"""
         self.config_manager.set_setting('log_folder', self.log_path_edit.text())
         self.config_manager.set_setting('auto_scan', self.auto_scan_check.isChecked())
+        self.config_manager.set_setting('compact_mode', self.compact_mode_check.isChecked())
         self.config_manager.set_setting('privacy_mode', self.privacy_mode_check.isChecked())
         self.accept()
 
@@ -3274,6 +3456,9 @@ class MainWindow(QMainWindow):
                 self._refresh_all_status()
             else:
                 self.status_label.setText("No printers found on network")
+            
+            # Clear status after 5 seconds
+            QTimer.singleShot(5000, lambda: self.status_label.setText("Ready"))
         
         worker = AsyncWorker(scan)
         worker.result_ready.connect(on_result)
@@ -3375,11 +3560,11 @@ class MainWindow(QMainWindow):
         
         # Right side - Stats panel (has internal scrolling)
         self.stats_panel = StatsPanel()
-        self.stats_panel.setMinimumWidth(370)
-        self.stats_panel.setMaximumWidth(420)
+        self.stats_panel.setMinimumWidth(320)
+        self.stats_panel.setMaximumWidth(380)
         splitter.addWidget(self.stats_panel)
         
-        splitter.setSizes([900, 350])
+        splitter.setSizes([900, 320])
         splitter.setStretchFactor(0, 1)  # Left side stretches
         splitter.setStretchFactor(1, 0)  # Right side fixed width
         
@@ -3401,14 +3586,15 @@ class MainWindow(QMainWindow):
         if key in self.printer_cards:
             return
         
-        card = PrinterCard(config)
+        compact_mode = self.config_manager.get_setting('compact_mode', False)
+        card = PrinterCard(config, compact_mode=compact_mode)
         card.camera_clicked.connect(self._on_camera_clicked)
         card.card_clicked.connect(self._on_card_clicked)
         self.printer_cards[key] = card
         
-        # Add to grid
+        # Add to grid - more columns in compact mode
         count = len(self.printer_cards) - 1
-        cols = 3
+        cols = 5 if compact_mode else 3
         row = count // cols
         col = count % cols
         self.cards_layout.addWidget(card, row, col)
@@ -3427,7 +3613,8 @@ class MainWindow(QMainWindow):
             self.cards_layout.removeWidget(card)
         
         # Re-add in order
-        cols = 3
+        compact_mode = self.config_manager.get_setting('compact_mode', False)
+        cols = 5 if compact_mode else 3
         for i, card in enumerate(self.printer_cards.values()):
             row = i // cols
             col = i % cols
