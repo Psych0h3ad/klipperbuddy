@@ -1301,6 +1301,7 @@ class StatsPanel(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._setup_ui()
         self._apply_style()
     
@@ -2878,8 +2879,10 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.stats_panel)
         
         splitter.setSizes([900, 350])
+        splitter.setStretchFactor(0, 1)  # Left side stretches
+        splitter.setStretchFactor(1, 0)  # Right side fixed width
         
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(splitter, 1)  # Give splitter stretch priority
         
         # Status bar
         self.status_label = QLabel("Ready")
