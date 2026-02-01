@@ -1470,7 +1470,7 @@ class StatsPanel(QFrame):
         # Content widget inside scroll area
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(8, 8, 16, 8)  # Extra right margin for scrollbar
         layout.setSpacing(4)
         
         # Selected printer name
