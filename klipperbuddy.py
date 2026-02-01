@@ -67,6 +67,7 @@ COLORS = {
     'bg_dark': '#0a0a0a',
     'bg_card': '#141414',
     'bg_card_hover': '#1a1a1a',
+    'bg_hover': '#1f1f1f',  # General hover background
     'surface': '#1a1a1a',  # For dialog backgrounds
     'accent': '#0ABAB5',  # Tiffany Blue
     'accent_dark': '#088F8B',
