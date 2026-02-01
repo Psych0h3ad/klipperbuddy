@@ -1338,8 +1338,8 @@ class StatsPanel(QFrame):
         # Content widget inside scroll area
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
         
         # Selected printer name
         self.printer_name_label = QLabel("Select a printer")
@@ -1355,25 +1355,25 @@ class StatsPanel(QFrame):
         layout.addWidget(graph_label)
         
         self.temp_chart = TemperatureChart()
-        self.temp_chart.setMinimumHeight(100)
-        self.temp_chart.setMaximumHeight(100)
+        self.temp_chart.setMinimumHeight(80)
+        self.temp_chart.setMaximumHeight(80)
         layout.addWidget(self.temp_chart)
         
         # Current temps display
         temp_display = QHBoxLayout()
         
         self.hotend_label = QLabel("Hotend: --°C")
-        self.hotend_label.setFont(QFont("Play", 10))
+        self.hotend_label.setFont(QFont("Play", 9))
         self.hotend_label.setStyleSheet(f"color: {COLORS['temp_hotend']};")
         temp_display.addWidget(self.hotend_label)
         
         self.bed_label = QLabel("Bed: --°C")
-        self.bed_label.setFont(QFont("Play", 10))
+        self.bed_label.setFont(QFont("Play", 9))
         self.bed_label.setStyleSheet(f"color: {COLORS['temp_bed']};")
         temp_display.addWidget(self.bed_label)
         
         self.chamber_label = QLabel("Chamber: --°C")
-        self.chamber_label.setFont(QFont("Play", 10))
+        self.chamber_label.setFont(QFont("Play", 9))
         self.chamber_label.setStyleSheet(f"color: {COLORS['temp_chamber']};")
         temp_display.addWidget(self.chamber_label)
         
@@ -1392,7 +1392,7 @@ class StatsPanel(QFrame):
         layout.addWidget(cam_label)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(100)
+        self.camera_frame.setFixedHeight(80)
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
@@ -1408,11 +1408,11 @@ class StatsPanel(QFrame):
         self.camera_image.setStyleSheet(f"color: {COLORS['text_muted']};")
         self.camera_image.setFont(QFont("Play", 9))
         self.camera_image.setText("Click a printer to view camera")
-        self.camera_image.setMinimumHeight(60)
+        self.camera_image.setMinimumHeight(40)
         cam_layout.addWidget(self.camera_image)
         
         self.open_camera_btn = QPushButton("Open in Browser")
-        self.open_camera_btn.setFixedHeight(24)
+        self.open_camera_btn.setFixedHeight(20)
         self.open_camera_btn.setEnabled(False)
         self.open_camera_btn.clicked.connect(self._open_camera)
         cam_layout.addWidget(self.open_camera_btn)
@@ -1434,38 +1434,38 @@ class StatsPanel(QFrame):
         
         # Statistics section
         stats_label = QLabel("📊 STATISTICS")
-        stats_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        stats_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         stats_label.setStyleSheet(f"color: {COLORS['accent']};")
         layout.addWidget(stats_label)
         
         stats_grid = QGridLayout()
-        stats_grid.setSpacing(4)
+        stats_grid.setSpacing(2)
         
         # Total Print Time
         stats_grid.addWidget(QLabel("Total Print Time:"), 0, 0)
         self.total_time_label = QLabel("--")
-        self.total_time_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.total_time_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         self.total_time_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_grid.addWidget(self.total_time_label, 0, 1)
         
         # Total Filament
         stats_grid.addWidget(QLabel("Filament Used:"), 1, 0)
         self.total_filament_label = QLabel("--")
-        self.total_filament_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.total_filament_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         self.total_filament_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_grid.addWidget(self.total_filament_label, 1, 1)
         
         # Print Count
         stats_grid.addWidget(QLabel("Print Count:"), 2, 0)
         self.print_count_label = QLabel("--")
-        self.print_count_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.print_count_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         self.print_count_label.setStyleSheet(f"color: {COLORS['accent']};")
         stats_grid.addWidget(self.print_count_label, 2, 1)
         
         # Success Rate
         stats_grid.addWidget(QLabel("Success Rate:"), 3, 0)
         self.success_rate_label = QLabel("--")
-        self.success_rate_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        self.success_rate_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
         self.success_rate_label.setStyleSheet(f"color: {COLORS['success']};")
         stats_grid.addWidget(self.success_rate_label, 3, 1)
         
@@ -1479,12 +1479,12 @@ class StatsPanel(QFrame):
         
         # System Info section
         sys_label = QLabel("💻 SYSTEM INFO")
-        sys_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        sys_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         sys_label.setStyleSheet(f"color: {COLORS['accent']};")
         layout.addWidget(sys_label)
         
         sys_grid = QGridLayout()
-        sys_grid.setSpacing(4)
+        sys_grid.setSpacing(2)
         
         sys_grid.addWidget(QLabel("Klipper:"), 0, 0)
         self.klipper_ver_label = QLabel("--")
@@ -1594,7 +1594,7 @@ class StatsPanel(QFrame):
         
         # Tuning Advisor section
         tuning_label = QLabel("🔧 TUNING ADVISOR")
-        tuning_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        tuning_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         tuning_label.setStyleSheet(f"color: {COLORS['accent']};")
         layout.addWidget(tuning_label)
         
@@ -1621,12 +1621,12 @@ class StatsPanel(QFrame):
         
         pid_btn_layout = QHBoxLayout()
         self.pid_hotend_btn = QPushButton("PID Tune Hotend")
-        self.pid_hotend_btn.setFixedHeight(24)
+        self.pid_hotend_btn.setFixedHeight(20)
         self.pid_hotend_btn.clicked.connect(lambda: self._run_pid_calibrate('extruder'))
         pid_btn_layout.addWidget(self.pid_hotend_btn)
         
         self.pid_bed_btn = QPushButton("PID Tune Bed")
-        self.pid_bed_btn.setFixedHeight(24)
+        self.pid_bed_btn.setFixedHeight(20)
         self.pid_bed_btn.clicked.connect(lambda: self._run_pid_calibrate('heater_bed'))
         pid_btn_layout.addWidget(self.pid_bed_btn)
         pid_warning_layout.addLayout(pid_btn_layout)
@@ -1669,7 +1669,7 @@ class StatsPanel(QFrame):
         shaper_layout.addLayout(shaper_grid)
         
         self.shaper_calibrate_btn = QPushButton("Run SHAPER_CALIBRATE")
-        self.shaper_calibrate_btn.setFixedHeight(24)
+        self.shaper_calibrate_btn.setFixedHeight(20)
         self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
         self.shaper_calibrate_btn.setEnabled(False)
         shaper_layout.addWidget(self.shaper_calibrate_btn)
@@ -1684,7 +1684,7 @@ class StatsPanel(QFrame):
         
         # Printer Control section
         control_label = QLabel("🎮 PRINTER CONTROL")
-        control_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        control_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         control_label.setStyleSheet(f"color: {COLORS['accent']};")
         layout.addWidget(control_label)
         
@@ -1697,12 +1697,12 @@ class StatsPanel(QFrame):
             }}
         """)
         control_layout = QVBoxLayout(control_frame)
-        control_layout.setContentsMargins(6, 6, 6, 6)
-        control_layout.setSpacing(4)
+        control_layout.setContentsMargins(4, 4, 4, 4)
+        control_layout.setSpacing(2)
         
         # Firmware Restart button
         self.firmware_restart_btn = QPushButton("🔄 FIRMWARE_RESTART")
-        self.firmware_restart_btn.setFixedHeight(28)
+        self.firmware_restart_btn.setFixedHeight(22)
         self.firmware_restart_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1722,7 +1722,7 @@ class StatsPanel(QFrame):
         
         # Restart button
         self.restart_btn = QPushButton("🔁 RESTART")
-        self.restart_btn.setFixedHeight(28)
+        self.restart_btn.setFixedHeight(22)
         self.restart_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1742,7 +1742,7 @@ class StatsPanel(QFrame):
         
         # Emergency Stop button
         self.emergency_stop_btn = QPushButton("🛑 EMERGENCY STOP")
-        self.emergency_stop_btn.setFixedHeight(30)
+        self.emergency_stop_btn.setFixedHeight(24)
         self.emergency_stop_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['error']};
@@ -1771,7 +1771,7 @@ class StatsPanel(QFrame):
         
         # Log Analyzer section
         log_label = QLabel("📊 LOG ANALYZER")
-        log_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
+        log_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
         log_label.setStyleSheet(f"color: {COLORS['accent']};")
         layout.addWidget(log_label)
         
@@ -1784,8 +1784,8 @@ class StatsPanel(QFrame):
             }}
         """)
         log_layout = QVBoxLayout(log_frame)
-        log_layout.setContentsMargins(6, 6, 6, 6)
-        log_layout.setSpacing(4)
+        log_layout.setContentsMargins(4, 4, 4, 4)
+        log_layout.setSpacing(2)
         
         # Log status
         self.log_status_label = QLabel("No log analyzed yet")
@@ -1809,7 +1809,7 @@ class StatsPanel(QFrame):
         
         # Analyze Log button
         self.analyze_log_btn = QPushButton("🔍 Analyze Log")
-        self.analyze_log_btn.setFixedHeight(26)
+        self.analyze_log_btn.setFixedHeight(22)
         self.analyze_log_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1829,7 +1829,7 @@ class StatsPanel(QFrame):
         
         # Download Log button
         self.download_log_btn = QPushButton("💾 Download Log")
-        self.download_log_btn.setFixedHeight(26)
+        self.download_log_btn.setFixedHeight(22)
         self.download_log_btn.clicked.connect(self._download_log)
         self.download_log_btn.setEnabled(False)
         log_layout.addWidget(self.download_log_btn)
