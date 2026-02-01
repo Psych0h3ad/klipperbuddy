@@ -1436,7 +1436,7 @@ class StatsPanel(QFrame):
         layout.addLayout(cam_header)
         
         self.camera_frame = QFrame()
-        self.camera_frame.setFixedHeight(80)
+        self.camera_frame.setFixedHeight(120)
         self.camera_frame.setStyleSheet(f"""
             background-color: {COLORS['bg_dark']};
             border: 1px solid {COLORS['border']};
@@ -1452,11 +1452,11 @@ class StatsPanel(QFrame):
         self.camera_image.setStyleSheet(f"color: {COLORS['text_muted']};")
         self.camera_image.setFont(QFont("Play", 9))
         self.camera_image.setText("Click a printer to view camera")
-        self.camera_image.setMinimumHeight(40)
+        self.camera_image.setMinimumHeight(80)
         cam_layout.addWidget(self.camera_image)
         
         self.open_camera_btn = QPushButton("Open in Browser")
-        self.open_camera_btn.setFixedHeight(20)
+        self.open_camera_btn.setFixedHeight(28)
         self.open_camera_btn.setEnabled(False)
         self.open_camera_btn.clicked.connect(self._open_camera)
         cam_layout.addWidget(self.open_camera_btn)
@@ -1686,12 +1686,12 @@ class StatsPanel(QFrame):
         
         pid_btn_layout = QHBoxLayout()
         self.pid_hotend_btn = QPushButton("PID Tune Hotend")
-        self.pid_hotend_btn.setFixedHeight(20)
+        self.pid_hotend_btn.setFixedHeight(28)
         self.pid_hotend_btn.clicked.connect(lambda: self._run_pid_calibrate('extruder'))
         pid_btn_layout.addWidget(self.pid_hotend_btn)
         
         self.pid_bed_btn = QPushButton("PID Tune Bed")
-        self.pid_bed_btn.setFixedHeight(20)
+        self.pid_bed_btn.setFixedHeight(28)
         self.pid_bed_btn.clicked.connect(lambda: self._run_pid_calibrate('heater_bed'))
         pid_btn_layout.addWidget(self.pid_bed_btn)
         pid_warning_layout.addLayout(pid_btn_layout)
@@ -1734,7 +1734,7 @@ class StatsPanel(QFrame):
         shaper_layout.addLayout(shaper_grid)
         
         self.shaper_calibrate_btn = QPushButton("Run SHAPER_CALIBRATE")
-        self.shaper_calibrate_btn.setFixedHeight(20)
+        self.shaper_calibrate_btn.setFixedHeight(28)
         self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
         self.shaper_calibrate_btn.setEnabled(False)
         shaper_layout.addWidget(self.shaper_calibrate_btn)
@@ -1794,7 +1794,7 @@ class StatsPanel(QFrame):
         
         # Analyze Log button
         self.analyze_log_btn = QPushButton("🔍 Analyze Log")
-        self.analyze_log_btn.setFixedHeight(22)
+        self.analyze_log_btn.setFixedHeight(28)
         self.analyze_log_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
@@ -1814,7 +1814,7 @@ class StatsPanel(QFrame):
         
         # Download Log button
         self.download_log_btn = QPushButton("💾 Download Log")
-        self.download_log_btn.setFixedHeight(22)
+        self.download_log_btn.setFixedHeight(28)
         self.download_log_btn.clicked.connect(self._download_log)
         self.download_log_btn.setEnabled(False)
         log_layout.addWidget(self.download_log_btn)
@@ -2001,14 +2001,24 @@ class StatsPanel(QFrame):
         reply = QMessageBox.question(
             self, "Input Shaper Calibration",
             "Run SHAPER_CALIBRATE?\n\n"
-            "This will measure resonance frequencies on both axes.\n"
+            "This will:\n"
+            "1. Home all axes (G28)\n"
+            "2. Measure resonance frequencies on both axes\n\n"
             "Make sure an accelerometer is connected and configured.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
             if self.gcode_requested:
-                self.gcode_requested(self._current_printer_config, "SHAPER_CALIBRATE")
+                # First home, then run shaper calibrate
+                self.gcode_requested(self._current_printer_config, "G28")
+                # Use a small delay before running calibration
+                QTimer.singleShot(2000, lambda: self._run_shaper_after_home())
+    
+    def _run_shaper_after_home(self):
+        """Run SHAPER_CALIBRATE after homing is complete"""
+        if self._current_printer_config and self.gcode_requested:
+            self.gcode_requested(self._current_printer_config, "SHAPER_CALIBRATE")
     
     def _check_pid_warning(self, hotend: float, bed: float, hotend_target: float, bed_target: float):
         """Check for temperature fluctuations that suggest PID tuning is needed"""
