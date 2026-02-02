@@ -3189,15 +3189,16 @@ class StatsPanel(QFrame):
     
     def enable_controls(self, enabled: bool = True):
         """Enable or disable printer control buttons"""
-        print(f"[DEBUG] enable_controls called with enabled={enabled}")
+        # Force enable/disable all control buttons
         self.firmware_restart_btn.setEnabled(enabled)
         self.restart_btn.setEnabled(enabled)
         self.emergency_stop_btn.setEnabled(enabled)
         self.analyze_log_btn.setEnabled(enabled)
         self.download_log_btn.setEnabled(enabled)
         self.backup_config_btn.setEnabled(enabled)
-        print(f"[DEBUG] backup_config_btn.isEnabled()={self.backup_config_btn.isEnabled()}")
-        print(f"[DEBUG] analyze_log_btn.isEnabled()={self.analyze_log_btn.isEnabled()}")
+        # Force UI update
+        self.backup_config_btn.repaint()
+        self.analyze_log_btn.repaint()
     
     def _firmware_restart(self):
         """Send FIRMWARE_RESTART command"""
@@ -4283,7 +4284,6 @@ class MainWindow(QMainWindow):
     
     def _on_card_clicked(self, card: PrinterCard):
         """Handle card selection"""
-        print(f"[DEBUG] Card clicked: {card.config.host}")
         # Deselect previous card
         if self.selected_printer and self.selected_printer != card:
             self.selected_printer.set_selected(False)
@@ -4298,7 +4298,6 @@ class MainWindow(QMainWindow):
         self.stats_panel.set_printer_config(card.config)  # Set config for G-code commands
         # Enable control buttons AFTER clear() since clear() disables them
         self.stats_panel.enable_controls(True)
-        print(f"[DEBUG] enable_controls called with config: {card.config is not None}")
         self.stats_panel.set_printer_name(card.config.name or card.config.host)
         self.stats_panel.update_stats(card.stats)
         self.stats_panel.update_system_info(card.system_info)  # Also updates MMU info
