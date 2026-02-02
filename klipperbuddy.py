@@ -1478,34 +1478,77 @@ class PrinterCard(QFrame):
             pass
     
     def _update_thumbnail(self):
-        """Fetch and update thumbnail for current print"""
-        if not self._current_filename or not self.client:
+        """Fetch and update thumbnail for current print using synchronous HTTP request"""
+        if not self._current_filename:
+            return
+        
+        if not self.config:
             return
         
         try:
-            # Run async thumbnail fetch in event loop
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self._fetch_thumbnail_async())
+            import urllib.request
+            import urllib.parse
+            
+            # Build the metadata URL
+            encoded_filename = urllib.parse.quote(self._current_filename, safe='')
+            base_url = f"http://{self.config.host}:{self.config.port}"
+            metadata_url = f"{base_url}/server/files/metadata?filename={encoded_filename}"
+            
+            print(f"[DEBUG] Fetching thumbnail metadata from: {metadata_url}")
+            
+            # Fetch metadata
+            req = urllib.request.Request(metadata_url, headers={'User-Agent': 'KlipperBuddy'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                import json
+                data = json.loads(response.read().decode('utf-8'))
+            
+            if 'result' not in data:
+                print(f"[DEBUG] No result in metadata response")
+                return
+            
+            result = data.get('result', {})
+            thumbnails = result.get('thumbnails', [])
+            
+            if not thumbnails:
+                print(f"[DEBUG] No thumbnails found in metadata")
+                return
+            
+            print(f"[DEBUG] Found {len(thumbnails)} thumbnails")
+            
+            # Get the largest thumbnail
+            largest = max(thumbnails, key=lambda t: t.get('width', 0) * t.get('height', 0))
+            thumb_path = largest.get('relative_path', '')
+            
+            if not thumb_path:
+                print(f"[DEBUG] No relative_path in thumbnail")
+                return
+            
+            print(f"[DEBUG] Thumbnail relative_path: {thumb_path}")
+            
+            # Build the full path - thumbnail path is relative to the gcode file's directory
+            file_dir = '/'.join(self._current_filename.split('/')[:-1])
+            if file_dir:
+                full_thumb_path = f"{file_dir}/{thumb_path}"
             else:
-                loop.run_until_complete(self._fetch_thumbnail_async())
-        except Exception:
-            pass
-    
-    async def _fetch_thumbnail_async(self):
-        """Async method to fetch thumbnail"""
-        if not self._current_filename or not self.client:
-            return
-        
-        try:
-            data = await self.client.get_thumbnail(self._current_filename)
-            if data:
+                full_thumb_path = thumb_path
+            
+            # URL encode the thumbnail path
+            encoded_thumb_path = urllib.parse.quote(full_thumb_path, safe='/')
+            thumb_url = f"{base_url}/server/files/gcodes/{encoded_thumb_path}"
+            
+            print(f"[DEBUG] Downloading thumbnail from: {thumb_url}")
+            
+            # Download the thumbnail
+            req = urllib.request.Request(thumb_url, headers={'User-Agent': 'KlipperBuddy'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                thumb_data = response.read()
+            
+            if thumb_data:
                 pixmap = QPixmap()
-                pixmap.loadFromData(data)
+                pixmap.loadFromData(thumb_data)
                 if not pixmap.isNull():
-                    # Scale to fit thumbnail area
-                    thumb_size = 80 if self.compact_mode else 96
+                    # Scale to fit thumbnail area (use frame size)
+                    thumb_size = 66 if self.compact_mode else 86  # Slightly smaller than frame
                     scaled = pixmap.scaled(
                         thumb_size, thumb_size,
                         Qt.AspectRatioMode.KeepAspectRatio,
@@ -1513,7 +1556,11 @@ class PrinterCard(QFrame):
                     )
                     self.thumbnail_label.setPixmap(scaled)
                     self.thumbnail_label.setStyleSheet("")
-        except Exception:
+                    print(f"[DEBUG] Thumbnail loaded successfully")
+                else:
+                    print(f"[DEBUG] Failed to load pixmap from thumbnail data")
+        except Exception as e:
+            print(f"[DEBUG] Thumbnail fetch error: {e}")
             pass
     
     def update_thumbnail_from_filename(self, filename: str):
@@ -1521,6 +1568,7 @@ class PrinterCard(QFrame):
         if filename != self._current_filename:
             self._current_filename = filename
             if filename:
+                print(f"[DEBUG] Updating thumbnail for: {filename}")
                 # Trigger immediate thumbnail update
                 self._update_thumbnail()
             else:
@@ -1560,12 +1608,12 @@ class PrinterCard(QFrame):
         
         # Camera + Thumbnail + Progress section (horizontal layout)
         media_section = QHBoxLayout()
-        media_section.setSpacing(6)
+        media_section.setSpacing(8)
         
-        # Camera preview
+        # Camera preview (larger size)
         if not self.compact_mode:
             self.camera_frame = QFrame()
-            self.camera_frame.setFixedSize(140, 100)
+            self.camera_frame.setFixedSize(120, 90)  # Larger camera preview
             self.camera_frame.setStyleSheet(f"""
                 QFrame {{
                     background-color: #0a0a0a;
@@ -1587,9 +1635,9 @@ class PrinterCard(QFrame):
             self.camera_frame = None
             self.camera_preview = None
         
-        # Thumbnail preview
+        # Thumbnail preview (larger size)
         self.thumbnail_frame = QFrame()
-        thumb_size = 80 if self.compact_mode else 100
+        thumb_size = 70 if self.compact_mode else 90  # Larger thumbnail
         self.thumbnail_frame.setFixedSize(thumb_size, thumb_size)
         self.thumbnail_frame.setStyleSheet(f"""
             QFrame {{
@@ -1609,8 +1657,8 @@ class PrinterCard(QFrame):
         thumb_layout.addWidget(self.thumbnail_label)
         media_section.addWidget(self.thumbnail_frame)
         
-        # Circular progress
-        progress_size = 50 if self.compact_mode else 60
+        # Circular progress (larger size)
+        progress_size = 55 if self.compact_mode else 70  # Larger progress circle
         self.circular_progress = CircularProgress(progress_size)
         media_section.addWidget(self.circular_progress)
         
