@@ -1464,14 +1464,8 @@ class PrinterCard(QFrame):
                 pixmap = QPixmap()
                 pixmap.loadFromData(data)
                 if not pixmap.isNull():
-                    # Scale to fit preview area while maintaining aspect ratio
-                    scaled = pixmap.scaled(
-                        self.camera_preview.width(), 
-                        self.camera_preview.height(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    self.camera_preview.setPixmap(scaled)
+                    # setScaledContents(True) handles scaling automatically
+                    self.camera_preview.setPixmap(pixmap)
                     self.camera_preview.setStyleSheet("")
         except Exception as e:
             # Keep showing "No Camera" on error
@@ -1547,14 +1541,8 @@ class PrinterCard(QFrame):
                 pixmap = QPixmap()
                 pixmap.loadFromData(thumb_data)
                 if not pixmap.isNull():
-                    # Scale to fit thumbnail area (use frame size - 4px padding)
-                    thumb_size = 76 if self.compact_mode else 96  # Match new larger frame size
-                    scaled = pixmap.scaled(
-                        thumb_size, thumb_size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    self.thumbnail_label.setPixmap(scaled)
+                    # setScaledContents(True) handles scaling automatically
+                    self.thumbnail_label.setPixmap(pixmap)
                     self.thumbnail_label.setStyleSheet("")
                     print(f"[DEBUG] Thumbnail loaded successfully")
                 else:
@@ -1610,7 +1598,7 @@ class PrinterCard(QFrame):
         media_section = QHBoxLayout()
         media_section.setSpacing(6)
         
-        # Camera preview - MUCH LARGER
+        # Camera preview - MUCH LARGER with fixed size label
         if not self.compact_mode:
             self.camera_frame = QFrame()
             self.camera_frame.setFixedSize(130, 100)  # Much larger camera
@@ -1626,8 +1614,9 @@ class PrinterCard(QFrame):
             camera_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             self.camera_preview = QLabel("No Camera")
+            self.camera_preview.setFixedSize(126, 96)  # Fixed size = frame - margins
             self.camera_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.camera_preview.setScaledContents(False)
+            self.camera_preview.setScaledContents(True)  # Scale image to fill label
             self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
             camera_layout.addWidget(self.camera_preview)
             media_section.addWidget(self.camera_frame)
@@ -1635,7 +1624,7 @@ class PrinterCard(QFrame):
             self.camera_frame = None
             self.camera_preview = None
         
-        # Thumbnail preview - MUCH LARGER
+        # Thumbnail preview - MUCH LARGER with fixed size label
         self.thumbnail_frame = QFrame()
         thumb_size = 80 if self.compact_mode else 100  # Much larger thumbnail
         self.thumbnail_frame.setFixedSize(thumb_size, thumb_size)
@@ -1650,9 +1639,11 @@ class PrinterCard(QFrame):
         thumb_layout.setContentsMargins(2, 2, 2, 2)
         thumb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
+        thumb_label_size = 76 if self.compact_mode else 96  # Fixed size = frame - margins
         self.thumbnail_label = QLabel("No Print")
+        self.thumbnail_label.setFixedSize(thumb_label_size, thumb_label_size)
         self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.thumbnail_label.setScaledContents(False)
+        self.thumbnail_label.setScaledContents(True)  # Scale image to fill label
         self.thumbnail_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
         thumb_layout.addWidget(self.thumbnail_label)
         media_section.addWidget(self.thumbnail_frame)
