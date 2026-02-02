@@ -1547,8 +1547,8 @@ class PrinterCard(QFrame):
                 pixmap = QPixmap()
                 pixmap.loadFromData(thumb_data)
                 if not pixmap.isNull():
-                    # Scale to fit thumbnail area (use frame size)
-                    thumb_size = 66 if self.compact_mode else 86  # Slightly smaller than frame
+                    # Scale to fit thumbnail area (use frame size - 4px padding)
+                    thumb_size = 76 if self.compact_mode else 96  # Match new larger frame size
                     scaled = pixmap.scaled(
                         thumb_size, thumb_size,
                         Qt.AspectRatioMode.KeepAspectRatio,
@@ -1608,12 +1608,12 @@ class PrinterCard(QFrame):
         
         # Camera + Thumbnail + Progress section (horizontal layout)
         media_section = QHBoxLayout()
-        media_section.setSpacing(8)
+        media_section.setSpacing(6)
         
-        # Camera preview (larger size)
+        # Camera preview - MUCH LARGER
         if not self.compact_mode:
             self.camera_frame = QFrame()
-            self.camera_frame.setFixedSize(120, 90)  # Larger camera preview
+            self.camera_frame.setFixedSize(130, 100)  # Much larger camera
             self.camera_frame.setStyleSheet(f"""
                 QFrame {{
                     background-color: #0a0a0a;
@@ -1635,9 +1635,9 @@ class PrinterCard(QFrame):
             self.camera_frame = None
             self.camera_preview = None
         
-        # Thumbnail preview (larger size)
+        # Thumbnail preview - MUCH LARGER
         self.thumbnail_frame = QFrame()
-        thumb_size = 70 if self.compact_mode else 90  # Larger thumbnail
+        thumb_size = 80 if self.compact_mode else 100  # Much larger thumbnail
         self.thumbnail_frame.setFixedSize(thumb_size, thumb_size)
         self.thumbnail_frame.setStyleSheet(f"""
             QFrame {{
@@ -1657,12 +1657,11 @@ class PrinterCard(QFrame):
         thumb_layout.addWidget(self.thumbnail_label)
         media_section.addWidget(self.thumbnail_frame)
         
-        # Circular progress (larger size)
-        progress_size = 55 if self.compact_mode else 70  # Larger progress circle
+        # Circular progress - LARGER
+        progress_size = 70 if self.compact_mode else 80  # Much larger progress
         self.circular_progress = CircularProgress(progress_size)
         media_section.addWidget(self.circular_progress)
         
-        media_section.addStretch()
         layout.addLayout(media_section)
         
         # Compact temperature display (single row)
@@ -3206,6 +3205,7 @@ class StatsPanel(QFrame):
         self.analyze_log_btn.setEnabled(enabled)
         self.download_log_btn.setEnabled(enabled)
         self.backup_config_btn.setEnabled(enabled)
+        print(f"[DEBUG] backup_config_btn.isEnabled()={self.backup_config_btn.isEnabled()}")
         print(f"[DEBUG] analyze_log_btn.isEnabled()={self.analyze_log_btn.isEnabled()}")
     
     def _firmware_restart(self):
@@ -3359,19 +3359,28 @@ class StatsPanel(QFrame):
     
     def _backup_configs(self):
         """Backup all Klipper configuration files"""
+        print(f"[DEBUG] _backup_configs called")
+        print(f"[DEBUG] _current_printer_config: {self._current_printer_config}")
+        
         if not self._current_printer_config:
+            print(f"[DEBUG] No printer config, returning")
             return
+        
+        print(f"[DEBUG] Printer: {self._current_printer_config.host}:{self._current_printer_config.port}")
         
         from pathlib import Path
         default_path = Path.home() / "Documents" / "KlipperBuddy" / "backups"
         default_path.mkdir(parents=True, exist_ok=True)
         
+        print(f"[DEBUG] Opening directory dialog...")
         save_dir = QFileDialog.getExistingDirectory(
             self, "Select Backup Directory",
             str(default_path)
         )
         
+        print(f"[DEBUG] Selected directory: {save_dir}")
         if not save_dir:
+            print(f"[DEBUG] No directory selected, returning")
             return
         
         self.backup_status_label.setText("Backing up...")
@@ -3380,6 +3389,7 @@ class StatsPanel(QFrame):
         
         try:
             import asyncio
+            print(f"[DEBUG] Creating MoonrakerClient...")
             client = MoonrakerClient(
                 self._current_printer_config.host,
                 self._current_printer_config.port,
