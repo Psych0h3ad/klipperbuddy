@@ -281,6 +281,17 @@ class SystemInfo:
     disk_free: int = 0  # bytes
     cpu_temp: float = 0.0
     webcam_url: str = ""
+    # MCU info
+    mcu_name: str = ""  # MCU type (e.g., "STM32F446", "RP2040")
+    mcu_version: str = ""  # MCU firmware version
+    mcu_freq: str = ""  # MCU frequency
+    # Host info
+    host_cpu: str = ""  # Host CPU model (e.g., "Raspberry Pi 4")
+    host_memory_total: int = 0  # bytes
+    host_memory_used: int = 0  # bytes
+    host_cpu_usage: float = 0.0  # percentage
+    # Uptime
+    system_uptime: float = 0.0  # seconds
     # Multi-color unit info (MMU/ERCF/AFC/QIDI BOX)
     mmu_type: str = ""  # "MMU", "ERCF", "AFC", "Tradrack", "QIDI BOX", etc.
     mmu_enabled: bool = False
@@ -772,7 +783,7 @@ class MoonrakerClient:
         except:
             pass
         
-        # Get system info (OS, CPU temp)
+        # Get system info (OS, CPU temp, host info)
         try:
             resp = await self._request('GET', '/machine/system_info')
             if resp and 'result' in resp:
@@ -782,10 +793,69 @@ class MoonrakerClient:
                 distro = sys_info.get('distribution', {})
                 info.os_info = f"{distro.get('name', '')} {distro.get('version', '')}".strip()
                 
-                # CPU temp
-                cpu_temp = sys_info.get('cpu_info', {}).get('cpu_temp')
+                # CPU temp and model
+                cpu_info = sys_info.get('cpu_info', {})
+                cpu_temp = cpu_info.get('cpu_temp')
                 if cpu_temp:
                     info.cpu_temp = cpu_temp
+                
+                # Host CPU model
+                cpu_model = cpu_info.get('model', '')
+                if cpu_model:
+                    info.host_cpu = cpu_model
+                
+                # Memory info
+                memory_info = sys_info.get('memory', {})
+                if memory_info:
+                    info.host_memory_total = memory_info.get('total', 0)
+                    info.host_memory_used = memory_info.get('used', 0)
+                
+                # CPU usage
+                cpu_usage = cpu_info.get('usage', 0)
+                if cpu_usage:
+                    info.host_cpu_usage = cpu_usage
+        except:
+            pass
+        
+        # Get MCU info
+        try:
+            resp = await self._request('GET', '/printer/objects/query?mcu')
+            if resp and 'result' in resp:
+                mcu_data = resp['result'].get('status', {}).get('mcu', {})
+                if mcu_data:
+                    # MCU name from mcu_constants
+                    mcu_constants = mcu_data.get('mcu_constants', {})
+                    mcu_name = mcu_constants.get('MCU', '')
+                    if mcu_name:
+                        info.mcu_name = mcu_name
+                    
+                    # MCU version
+                    mcu_version = mcu_data.get('mcu_version', '')
+                    if mcu_version:
+                        info.mcu_version = mcu_version
+                    
+                    # MCU frequency
+                    freq = mcu_constants.get('CLOCK_FREQ', 0)
+                    if freq:
+                        freq_mhz = int(freq) / 1000000
+                        info.mcu_freq = f"{freq_mhz:.0f}MHz"
+        except:
+            pass
+        
+        # Get system uptime from proc stats
+        try:
+            resp = await self._request('GET', '/machine/proc_stats')
+            if resp and 'result' in resp:
+                # System uptime in seconds
+                uptime = resp['result'].get('system_uptime', 0)
+                if uptime:
+                    info.system_uptime = uptime
+                
+                # Also get CPU usage from here if not already set
+                if info.host_cpu_usage == 0:
+                    cpu_usage = resp['result'].get('system_cpu_usage', {}).get('cpu', 0)
+                    if cpu_usage:
+                        info.host_cpu_usage = cpu_usage
         except:
             pass
         
@@ -1750,6 +1820,38 @@ class PrinterCard(QFrame):
         
         layout.addLayout(info_row)
         
+        # System info row (MCU, Host, Uptime)
+        sys_info_row = QHBoxLayout()
+        sys_info_row.setSpacing(4)
+        
+        self.mcu_label = QLabel("MCU: --")
+        self.mcu_label.setFont(QFont("Play", 8))
+        self.mcu_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        sys_info_row.addWidget(self.mcu_label)
+        
+        sep1 = QLabel("|")
+        sep1.setFont(QFont("Play", 8))
+        sep1.setStyleSheet(f"color: {COLORS['text_muted']};")
+        sys_info_row.addWidget(sep1)
+        
+        self.host_info_label = QLabel("Host: --")
+        self.host_info_label.setFont(QFont("Play", 8))
+        self.host_info_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        sys_info_row.addWidget(self.host_info_label)
+        
+        sep2 = QLabel("|")
+        sep2.setFont(QFont("Play", 8))
+        sep2.setStyleSheet(f"color: {COLORS['text_muted']};")
+        sys_info_row.addWidget(sep2)
+        
+        self.uptime_label = QLabel("Up: --")
+        self.uptime_label.setFont(QFont("Play", 8))
+        self.uptime_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        sys_info_row.addWidget(self.uptime_label)
+        
+        sys_info_row.addStretch()
+        layout.addLayout(sys_info_row)
+        
         # Keep progress_bar and progress_label for compatibility (hidden)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -2113,6 +2215,45 @@ class PrinterCard(QFrame):
         else:
             # Try default webcam URL
             self._camera_url = f"http://{self.config.host}/webcam/?action=stream"
+        
+        # Update MCU info
+        if info.mcu_name:
+            self.mcu_label.setText(f"MCU: {info.mcu_name}")
+        elif info.mcu_version:
+            # Show version if name not available
+            ver = info.mcu_version[:15] if len(info.mcu_version) > 15 else info.mcu_version
+            self.mcu_label.setText(f"MCU: {ver}")
+        else:
+            self.mcu_label.setText("MCU: --")
+        
+        # Update Host info (CPU model + memory usage)
+        if info.host_cpu:
+            # Shorten CPU model name
+            cpu = info.host_cpu
+            if len(cpu) > 20:
+                cpu = cpu[:17] + "..."
+            if info.host_memory_total > 0:
+                mem_pct = (info.host_memory_used / info.host_memory_total) * 100
+                self.host_info_label.setText(f"{cpu} ({mem_pct:.0f}%)")
+            else:
+                self.host_info_label.setText(f"{cpu}")
+        else:
+            self.host_info_label.setText("Host: --")
+        
+        # Update Uptime
+        if info.system_uptime > 0:
+            uptime_secs = info.system_uptime
+            days = int(uptime_secs // 86400)
+            hours = int((uptime_secs % 86400) // 3600)
+            mins = int((uptime_secs % 3600) // 60)
+            if days > 0:
+                self.uptime_label.setText(f"Up: {days}d {hours}h")
+            elif hours > 0:
+                self.uptime_label.setText(f"Up: {hours}h {mins}m")
+            else:
+                self.uptime_label.setText(f"Up: {mins}m")
+        else:
+            self.uptime_label.setText("Up: --")
     
     def set_name(self, name: str):
         self.config.name = name
