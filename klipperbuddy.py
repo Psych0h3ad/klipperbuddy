@@ -1056,6 +1056,34 @@ class MoonrakerClient:
             result['errors'].append(f"Backup failed: {str(e)}")
         
         return result
+    
+    async def get_thumbnail(self, filename: str) -> Optional[bytes]:
+        """Get thumbnail image for a G-code file"""
+        if not filename:
+            return None
+        
+        try:
+            # Get file metadata which includes thumbnail info
+            resp = await self._request('GET', f'/server/files/metadata?filename={filename}')
+            if resp and 'result' in resp:
+                metadata = resp['result']
+                thumbnails = metadata.get('thumbnails', [])
+                
+                if thumbnails:
+                    # Get the largest thumbnail
+                    best_thumb = max(thumbnails, key=lambda t: t.get('width', 0) * t.get('height', 0))
+                    thumb_path = best_thumb.get('relative_path', '')
+                    
+                    if thumb_path:
+                        # Download the thumbnail
+                        session = await self._get_session()
+                        thumb_url = f"{self.base_url}/server/files/gcodes/{thumb_path}"
+                        async with session.get(thumb_url, timeout=aiohttp.ClientTimeout(total=10)) as thumb_resp:
+                            if thumb_resp.status == 200:
+                                return await thumb_resp.read()
+        except:
+            pass
+        return None
 
 
 # =============================================================================
@@ -1272,6 +1300,59 @@ class TemperatureChart(QWidget):
 
 
 # =============================================================================
+# Circular Progress Widget
+# =============================================================================
+
+class CircularProgress(QWidget):
+    """Circular progress indicator widget"""
+    
+    def __init__(self, size: int = 60, parent=None):
+        super().__init__(parent)
+        self._size = size
+        self._value = 0
+        self._max_value = 100
+        self.setFixedSize(size, size)
+    
+    def setValue(self, value: int):
+        self._value = max(0, min(value, self._max_value))
+        self.update()
+    
+    def value(self) -> int:
+        return self._value
+    
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Calculate dimensions
+        pen_width = 6
+        margin = pen_width // 2 + 2
+        rect = QRectF(margin, margin, self._size - 2 * margin, self._size - 2 * margin)
+        
+        # Draw background circle
+        painter.setPen(QPen(QColor(COLORS['border']), pen_width))
+        painter.drawArc(rect, 0, 360 * 16)
+        
+        # Draw progress arc
+        if self._value > 0:
+            # Gradient color based on progress
+            progress_color = QColor(COLORS['accent'])
+            painter.setPen(QPen(progress_color, pen_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            # Start from top (90 degrees) and go clockwise (negative)
+            start_angle = 90 * 16
+            span_angle = -int(360 * 16 * self._value / self._max_value)
+            painter.drawArc(rect, start_angle, span_angle)
+        
+        # Draw percentage text
+        painter.setPen(QColor(COLORS['text_primary']))
+        font = QFont("Play", self._size // 5, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{self._value}%")
+
+
+
+
+# =============================================================================
 # Printer Card Widget
 # =============================================================================
 
@@ -1353,9 +1434,9 @@ class PrinterCard(QFrame):
     
     def _setup_ui(self):
         if self.compact_mode:
-            self.setFixedSize(230, 280)  # Compact card without camera (6 columns at 1920)
+            self.setFixedSize(230, 280)  # Compact card (6 columns at 1920)
         else:
-            self.setFixedSize(320, 420)  # Standard card with camera (3 columns + sidebar at 1920)
+            self.setFixedSize(320, 380)  # Standard card with camera + thumbnail
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(3)
@@ -1370,8 +1451,8 @@ class PrinterCard(QFrame):
         self.name_label = QLabel(self.config.name or self.config.host)
         self.name_label.setFont(QFont("Play", 11 if self.compact_mode else 12, QFont.Weight.Bold))
         self.name_label.setStyleSheet(f"color: {COLORS['accent']};")
-        self.name_label.setMaximumWidth(140 if self.compact_mode else 200)  # Limit width for card size
-        self.name_label.setToolTip(self.config.name or self.config.host)  # Full name in tooltip
+        self.name_label.setMaximumWidth(140 if self.compact_mode else 200)
+        self.name_label.setToolTip(self.config.name or self.config.host)
         header.addWidget(self.name_label)
         header.addStretch()
         
@@ -1381,11 +1462,14 @@ class PrinterCard(QFrame):
         
         layout.addLayout(header)
         
-        # Camera preview section (only in standard mode)
+        # Camera + Thumbnail section (horizontal layout)
         if not self.compact_mode:
+            media_container = QHBoxLayout()
+            media_container.setSpacing(4)
+            
+            # Camera preview
             self.camera_frame = QFrame()
-            # 16:9 aspect ratio: width 316 (340-24 margins) -> height ~178
-            self.camera_frame.setFixedHeight(160)
+            self.camera_frame.setFixedSize(150, 100)
             self.camera_frame.setStyleSheet(f"""
                 QFrame {{
                     background-color: #0a0a0a;
@@ -1399,13 +1483,49 @@ class PrinterCard(QFrame):
             
             self.camera_preview = QLabel("No Camera")
             self.camera_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.camera_preview.setScaledContents(False)  # Maintain aspect ratio
-            self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+            self.camera_preview.setScaledContents(False)
+            self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
             camera_layout.addWidget(self.camera_preview)
-            layout.addWidget(self.camera_frame)
+            media_container.addWidget(self.camera_frame)
+            
+            # Thumbnail preview
+            self.thumbnail_frame = QFrame()
+            self.thumbnail_frame.setFixedSize(100, 100)
+            self.thumbnail_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: #0a0a0a;
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                }}
+            """)
+            thumb_layout = QHBoxLayout(self.thumbnail_frame)
+            thumb_layout.setContentsMargins(0, 0, 0, 0)
+            thumb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            self.thumbnail_label = QLabel("No Print")
+            self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.thumbnail_label.setScaledContents(False)
+            self.thumbnail_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
+            thumb_layout.addWidget(self.thumbnail_label)
+            media_container.addWidget(self.thumbnail_frame)
+            
+            # Circular progress
+            self.circular_progress = CircularProgress(60)
+            media_container.addWidget(self.circular_progress)
+            
+            layout.addLayout(media_container)
         else:
             self.camera_frame = None
             self.camera_preview = None
+            self.thumbnail_frame = None
+            self.thumbnail_label = None
+            self.circular_progress = CircularProgress(50)
+            
+            # In compact mode, show circular progress at top right area
+            compact_progress_layout = QHBoxLayout()
+            compact_progress_layout.addStretch()
+            compact_progress_layout.addWidget(self.circular_progress)
+            layout.addLayout(compact_progress_layout)
         
         # Separator line
         line = QFrame()
@@ -1413,50 +1533,96 @@ class PrinterCard(QFrame):
         line.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
         layout.addWidget(line)
         
-        # Temperature section - using VBoxLayout for dynamic rows
+        # Compact temperature section - single row
+        temp_row = QHBoxLayout()
+        temp_row.setSpacing(4)
+        
+        # Extruder temp (compact)
+        ext_icon = QLabel()
+        ext_icon_path = resource_path("icons/hotend.svg")
+        if os.path.exists(ext_icon_path):
+            ext_pixmap = QPixmap(ext_icon_path).scaled(14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            ext_icon.setPixmap(ext_pixmap)
+        else:
+            ext_icon.setText("●")
+            ext_icon.setStyleSheet(f"color: {COLORS['temp_hotend']};")
+            ext_icon.setFont(QFont("Arial", 10))
+        temp_row.addWidget(ext_icon)
+        
+        self.ext_label = QLabel("T0")
+        self.ext_label.setFont(QFont("Play", 8))
+        self.ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_row.addWidget(self.ext_label)
+        
+        self.ext_temp_label = QLabel("--°C")
+        self.ext_temp_label.setFont(QFont("Play", 9))
+        self.ext_temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        temp_row.addWidget(self.ext_temp_label)
+        
+        temp_row.addSpacing(8)
+        
+        # Bed temp (compact)
+        bed_icon = QLabel()
+        bed_icon_path = resource_path("icons/bed.svg")
+        if os.path.exists(bed_icon_path):
+            bed_pixmap = QPixmap(bed_icon_path).scaled(14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            bed_icon.setPixmap(bed_pixmap)
+        else:
+            bed_icon.setText("●")
+            bed_icon.setStyleSheet(f"color: {COLORS['temp_bed']};")
+            bed_icon.setFont(QFont("Arial", 10))
+        temp_row.addWidget(bed_icon)
+        
+        bed_label = QLabel("Bed")
+        bed_label.setFont(QFont("Play", 8))
+        bed_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_row.addWidget(bed_label)
+        
+        self.bed_temp_label = QLabel("--°C")
+        self.bed_temp_label.setFont(QFont("Play", 9))
+        self.bed_temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        temp_row.addWidget(self.bed_temp_label)
+        
+        temp_row.addSpacing(8)
+        
+        # Chamber temp (compact)
+        chamber_icon = QLabel()
+        chamber_icon_path = resource_path("icons/chamber.svg")
+        if os.path.exists(chamber_icon_path):
+            chamber_pixmap = QPixmap(chamber_icon_path).scaled(14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            chamber_icon.setPixmap(chamber_pixmap)
+        else:
+            chamber_icon.setText("●")
+            chamber_icon.setStyleSheet(f"color: {COLORS['temp_chamber']};")
+            chamber_icon.setFont(QFont("Arial", 10))
+        temp_row.addWidget(chamber_icon)
+        
+        chamber_label = QLabel("Ch")
+        chamber_label.setFont(QFont("Play", 8))
+        chamber_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_row.addWidget(chamber_label)
+        
+        self.chamber_temp_label = QLabel("--°C")
+        self.chamber_temp_label.setFont(QFont("Play", 9))
+        self.chamber_temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        temp_row.addWidget(self.chamber_temp_label)
+        
+        temp_row.addStretch()
+        layout.addLayout(temp_row)
+        
+        # Multi-extruder row (T1, T2, T3 shown horizontally - hidden by default)
         self.temp_container = QWidget()
         self.temp_layout = QVBoxLayout(self.temp_container)
         self.temp_layout.setContentsMargins(0, 0, 0, 0)
         self.temp_layout.setSpacing(2)
         
-        # Extruder row (T0 for multi-extruder)
-        ext_row = QHBoxLayout()
-        ext_row.setSpacing(8)
-        
-        ext_icon = QLabel()
-        ext_icon_path = resource_path("icons/hotend.svg")
-        if os.path.exists(ext_icon_path):
-            ext_pixmap = QPixmap(ext_icon_path).scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            ext_icon.setPixmap(ext_pixmap)
-        else:
-            ext_icon.setText("●")
-            ext_icon.setStyleSheet(f"color: {COLORS['temp_hotend']};")
-            ext_icon.setFont(QFont("Arial", 12))
-        ext_icon.setFixedWidth(20)
-        ext_row.addWidget(ext_icon)
-        
-        self.ext_label = QLabel("Extruder")
-        self.ext_label.setFont(QFont("Play", 9))
-        self.ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.ext_label.setFixedWidth(55)  # Reduced width
-        ext_row.addWidget(self.ext_label)
-        
-        self.ext_temp_label = QLabel("--°C / --°C")
-        self.ext_temp_label.setFont(QFont("Play", 10))
-        self.ext_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.ext_temp_label.setMinimumWidth(120)  # Ensure enough space for temps
-        ext_row.addWidget(self.ext_temp_label)
-        
-        self.temp_layout.addLayout(ext_row)
-        
-        # Multi-extruder row (T1, T2, T3 shown horizontally - hidden by default)
         self.multi_ext_row_widget = QWidget()
         multi_ext_layout = QHBoxLayout(self.multi_ext_row_widget)
-        multi_ext_layout.setContentsMargins(20, 0, 0, 0)  # Indent to align with other rows
+        multi_ext_layout.setContentsMargins(0, 0, 0, 0)
         multi_ext_layout.setSpacing(4)
         
-        self.multi_ext_labels = []  # List of (label, temp_label) tuples
-        for i in range(1, 6):  # Support up to T5
+        self.multi_ext_labels = []
+        for i in range(1, 6):
             label = QLabel(f"T{i}")
             label.setFont(QFont("Play", 8))
             label.setStyleSheet(f"color: {COLORS['text_secondary']};")
@@ -1467,7 +1633,6 @@ class PrinterCard(QFrame):
             temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
             multi_ext_layout.addWidget(temp_label)
             
-            # Add separator except for last
             if i < 5:
                 sep = QLabel("|")
                 sep.setFont(QFont("Play", 8))
@@ -1479,115 +1644,47 @@ class PrinterCard(QFrame):
         multi_ext_layout.addStretch()
         self.multi_ext_row_widget.setVisible(False)
         self.temp_layout.addWidget(self.multi_ext_row_widget)
-        
-        # Chamber row
-        chamber_row = QHBoxLayout()
-        chamber_row.setSpacing(8)
-        
-        chamber_icon = QLabel()
-        chamber_icon_path = resource_path("icons/chamber.svg")
-        if os.path.exists(chamber_icon_path):
-            chamber_pixmap = QPixmap(chamber_icon_path).scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            chamber_icon.setPixmap(chamber_pixmap)
-        else:
-            chamber_icon.setText("●")
-            chamber_icon.setStyleSheet(f"color: {COLORS['temp_chamber']};")
-            chamber_icon.setFont(QFont("Arial", 12))
-        chamber_icon.setFixedWidth(20)
-        chamber_row.addWidget(chamber_icon)
-        
-        chamber_label = QLabel("Chamber")
-        chamber_label.setFont(QFont("Play", 9))
-        chamber_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        chamber_label.setFixedWidth(55)  # Reduced width
-        chamber_row.addWidget(chamber_label)
-        
-        self.chamber_temp_label = QLabel("--°C")
-        self.chamber_temp_label.setFont(QFont("Play", 10))
-        self.chamber_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.chamber_temp_label.setMinimumWidth(120)  # Ensure enough space for temps
-        chamber_row.addWidget(self.chamber_temp_label)
-        
-        self.temp_layout.addLayout(chamber_row)
-        
-        # Bed row
-        bed_row = QHBoxLayout()
-        bed_row.setSpacing(8)
-        
-        bed_icon = QLabel()
-        bed_icon_path = resource_path("icons/bed.svg")
-        if os.path.exists(bed_icon_path):
-            bed_pixmap = QPixmap(bed_icon_path).scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            bed_icon.setPixmap(bed_pixmap)
-        else:
-            bed_icon.setText("●")
-            bed_icon.setStyleSheet(f"color: {COLORS['temp_bed']};")
-            bed_icon.setFont(QFont("Arial", 12))
-        bed_icon.setFixedWidth(20)
-        bed_row.addWidget(bed_icon)
-        
-        bed_label = QLabel("Bed")
-        bed_label.setFont(QFont("Play", 9))
-        bed_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        bed_label.setFixedWidth(55)  # Reduced width
-        bed_row.addWidget(bed_label)
-        
-        self.bed_temp_label = QLabel("--°C / --°C")
-        self.bed_temp_label.setFont(QFont("Play", 10))
-        self.bed_temp_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.bed_temp_label.setMinimumWidth(120)  # Ensure enough space for temps
-        bed_row.addWidget(self.bed_temp_label)
-        
-        self.temp_layout.addLayout(bed_row)
-        
         layout.addWidget(self.temp_container)
         
-        # Print progress section
-        layout.addSpacing(8)
+        # Print info section (filename + ETA in one row)
+        print_info_row = QHBoxLayout()
         
         self.filename_label = QLabel("No active print")
-        self.filename_label.setFont(QFont("Play", 9 if self.compact_mode else 10))
+        self.filename_label.setFont(QFont("Play", 9))
         self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.filename_label.setWordWrap(False)  # Disable word wrap to prevent overflow
-        self.filename_label.setMaximumWidth(200 if self.compact_mode else 300)
-        layout.addWidget(self.filename_label)
+        self.filename_label.setWordWrap(False)
+        self.filename_label.setMaximumWidth(180 if self.compact_mode else 220)
+        print_info_row.addWidget(self.filename_label)
         
-        # Progress bar
-        progress_container = QHBoxLayout()
+        print_info_row.addStretch()
         
+        self.eta_label = QLabel("ETA: --:--:--")
+        self.eta_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.eta_label.setFont(QFont("Play", 9))
+        print_info_row.addWidget(self.eta_label)
+        
+        layout.addLayout(print_info_row)
+        
+        # Keep progress_bar and progress_label for compatibility (hidden)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(8)
-        progress_container.addWidget(self.progress_bar)
+        self.progress_bar.setVisible(False)
         
         self.progress_label = QLabel("0%")
-        self.progress_label.setFont(QFont("Play", 11, QFont.Weight.Bold))
-        self.progress_label.setStyleSheet(f"color: {COLORS['accent']};")
-        self.progress_label.setFixedWidth(45)
-        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        progress_container.addWidget(self.progress_label)
-        
-        layout.addLayout(progress_container)
-        
-        # ETA
-        self.eta_label = QLabel("ETA: --:--:--")
-        self.eta_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.eta_label.setFont(QFont("Play", 10))
-        layout.addWidget(self.eta_label)
+        self.progress_label.setVisible(False)
         
         layout.addStretch()
         
-        # Action buttons - larger and more visible
+        # Action buttons
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
+        btn_layout.setSpacing(8)
         
         # Camera button
         self.camera_btn = QPushButton()
         self.camera_btn.setIcon(get_icon("camera"))
-        self.camera_btn.setIconSize(QPixmap(24, 24).size())
-        self.camera_btn.setFixedSize(48, 36)
+        self.camera_btn.setIconSize(QPixmap(20, 20).size())
+        self.camera_btn.setFixedSize(40, 32)
         self.camera_btn.setToolTip("View Camera")
         self.camera_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1607,8 +1704,8 @@ class PrinterCard(QFrame):
         # Graph button
         self.graph_btn = QPushButton()
         self.graph_btn.setIcon(get_icon("graph"))
-        self.graph_btn.setIconSize(QPixmap(24, 24).size())
-        self.graph_btn.setFixedSize(48, 36)
+        self.graph_btn.setIconSize(QPixmap(20, 20).size())
+        self.graph_btn.setFixedSize(40, 32)
         self.graph_btn.setToolTip("Temperature Graph")
         self.graph_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1626,8 +1723,8 @@ class PrinterCard(QFrame):
         # Web button
         self.web_btn = QPushButton()
         self.web_btn.setIcon(get_icon("web"))
-        self.web_btn.setIconSize(QPixmap(24, 24).size())
-        self.web_btn.setFixedSize(48, 36)
+        self.web_btn.setIconSize(QPixmap(20, 20).size())
+        self.web_btn.setFixedSize(40, 32)
         self.web_btn.setToolTip("Open Web Interface")
         self.web_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1642,9 +1739,9 @@ class PrinterCard(QFrame):
         self.web_btn.clicked.connect(self._on_web_click)
         btn_layout.addWidget(self.web_btn)
         
-        # Login button (hidden by default, shown when auth required)
+        # Login button (hidden by default)
         self.login_btn = QPushButton("🔐")
-        self.login_btn.setFixedSize(48, 36)
+        self.login_btn.setFixedSize(40, 32)
         self.login_btn.setToolTip("Login Required")
         self.login_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1652,7 +1749,7 @@ class PrinterCard(QFrame):
                 border: 1px solid #ff8800;
                 border-radius: 4px;
                 color: #ff8800;
-                font-size: 16px;
+                font-size: 14px;
             }}
             QPushButton:hover {{
                 background-color: #ff8800;
@@ -1660,7 +1757,7 @@ class PrinterCard(QFrame):
             }}
         """)
         self.login_btn.clicked.connect(self._on_login_click)
-        self.login_btn.setVisible(False)  # Hidden by default
+        self.login_btn.setVisible(False)
         btn_layout.addWidget(self.login_btn)
         
         btn_layout.addStretch()
@@ -1671,7 +1768,8 @@ class PrinterCard(QFrame):
         self.host_label = QLabel(f"{self.config.host}:{self.config.port}")
         self.host_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
         layout.addWidget(self.host_label)
-    
+
+
     def _apply_style(self, selected: bool = False):
         # Get border color based on printer state
         state_color = self.STATE_COLORS.get(self._current_state, COLORS['border'])
@@ -1853,12 +1951,15 @@ class PrinterCard(QFrame):
         else:
             self.login_btn.setVisible(False)
         
-        # Update temperatures
+        # Update temperatures (compact format)
         # Handle multi-extruder printers (like Snapmaker U1 with 4 toolheads)
         if status.extruder_count > 1 and status.extruder_temps:
-            # Show T0 for first extruder
+            # Show T0 for first extruder (compact)
             self.ext_label.setText("T0")
-            self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
+            if status.extruder_target > 0:
+                self.ext_temp_label.setText(f"{status.extruder_temp:.0f}/{status.extruder_target:.0f}°C")
+            else:
+                self.ext_temp_label.setText(f"{status.extruder_temp:.0f}°C")
             
             # Show additional extruders horizontally (T1, T2, T3, etc.)
             self.multi_ext_row_widget.setVisible(True)
@@ -1876,13 +1977,22 @@ class PrinterCard(QFrame):
                     label.setVisible(False)
                     temp_label.setVisible(False)
         else:
-            # Single extruder - hide multi-extruder row
-            self.ext_label.setText("Extruder")
-            self.ext_temp_label.setText(f"{status.extruder_temp:.1f}°C / {status.extruder_target:.0f}°C")
+            # Single extruder - hide multi-extruder row (compact)
+            self.ext_label.setText("T0")
+            if status.extruder_target > 0:
+                self.ext_temp_label.setText(f"{status.extruder_temp:.0f}/{status.extruder_target:.0f}°C")
+            else:
+                self.ext_temp_label.setText(f"{status.extruder_temp:.0f}°C")
             self.multi_ext_row_widget.setVisible(False)
         
-        self.bed_temp_label.setText(f"{status.bed_temp:.1f}°C / {status.bed_target:.0f}°C")
-        self.chamber_temp_label.setText(f"{status.chamber_temp:.1f}°C" if status.chamber_temp > 0 else "--°C")
+        # Bed temp (compact)
+        if status.bed_target > 0:
+            self.bed_temp_label.setText(f"{status.bed_temp:.0f}/{status.bed_target:.0f}°C")
+        else:
+            self.bed_temp_label.setText(f"{status.bed_temp:.0f}°C")
+        
+        # Chamber temp (compact)
+        self.chamber_temp_label.setText(f"{status.chamber_temp:.0f}°C" if status.chamber_temp > 0 else "--°C")
         
         # Update print info
         if status.filename:
@@ -1900,9 +2010,11 @@ class PrinterCard(QFrame):
             self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         
         
-        # Update progress
+        # Update progress (circular progress bar)
         self.progress_bar.setValue(int(status.progress))
         self.progress_label.setText(f"{status.progress:.1f}%")
+        if hasattr(self, 'circular_progress') and self.circular_progress:
+            self.circular_progress.set_value(status.progress)
         
         # Update ETA
         if status.eta_seconds > 0:
@@ -1951,663 +2063,343 @@ class StatsPanel(QFrame):
         self._apply_style()
     
     def _setup_ui(self):
-        # Main layout for the frame
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        # Create scroll area inside the panel
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet(f"""
-            QScrollArea {{
-                background-color: transparent;
-                border: none;
-            }}
-            QScrollBar:vertical {{
-                background-color: {COLORS['bg_dark']};
-                width: 8px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background-color: {COLORS['border']};
-                border-radius: 4px;
-                min-height: 20px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background-color: {COLORS['accent']};
-            }}
-        """)
-        
-        # Content widget inside scroll area
-        content_widget = QWidget()
-        layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(6, 6, 12, 6)  # Compact margins
+        if self.compact_mode:
+            self.setFixedSize(230, 280)  # Compact card (6 columns at 1920)
+        else:
+            self.setFixedSize(320, 380)  # Standard card with camera + thumbnail
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(3)
         
-        # Selected printer name
-        self.printer_name_label = QLabel("Select a printer")
-        self.printer_name_label.setFont(QFont("Play", 12, QFont.Weight.Bold))
-        self.printer_name_label.setStyleSheet(f"color: {COLORS['accent']};")
-        self.printer_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.printer_name_label.setWordWrap(True)  # Allow wrapping for long names
-        layout.addWidget(self.printer_name_label)
-        
-        # Temperature Graph
-        graph_header = QHBoxLayout()
-        graph_header.setSpacing(4)
-        graph_icon = QLabel()
-        graph_icon.setPixmap(get_icon("temperature").pixmap(14, 14))
-        graph_header.addWidget(graph_icon)
-        graph_label = QLabel("TEMPERATURE GRAPH")
-        graph_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        graph_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        graph_header.addWidget(graph_label)
-        graph_header.addStretch()
-        layout.addLayout(graph_header)
-        
-        self.temp_chart = TemperatureChart()
-        self.temp_chart.setMinimumHeight(80)
-        self.temp_chart.setMaximumHeight(80)
-        layout.addWidget(self.temp_chart)
-        
-        # Current temps display
-        temp_display = QHBoxLayout()
-        temp_display.setSpacing(2)
-        
-        self.hotend_label = QLabel("Hotend: --°C")
-        self.hotend_label.setFont(QFont("Play", 8))
-        self.hotend_label.setStyleSheet(f"color: {COLORS['temp_hotend']};")
-        temp_display.addWidget(self.hotend_label)
-        
-        self.bed_label = QLabel("Bed: --°C")
-        self.bed_label.setFont(QFont("Play", 8))
-        self.bed_label.setStyleSheet(f"color: {COLORS['temp_bed']};")
-        temp_display.addWidget(self.bed_label)
-        
-        self.chamber_label = QLabel("Chamber: --°C")
-        self.chamber_label.setFont(QFont("Play", 8))
-        self.chamber_label.setStyleSheet(f"color: {COLORS['temp_chamber']};")
-        temp_display.addWidget(self.chamber_label)
-        
-        layout.addLayout(temp_display)
-        
-        # Separator
-        line1 = QFrame()
-        line1.setFrameShape(QFrame.Shape.HLine)
-        line1.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line1)
-        
-        # Camera Preview section
-        cam_header = QHBoxLayout()
-        cam_header.setSpacing(4)
-        cam_icon = QLabel()
-        cam_icon.setPixmap(get_icon("camera").pixmap(14, 14))
-        cam_header.addWidget(cam_icon)
-        cam_label = QLabel("CAMERA PREVIEW")
-        cam_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        cam_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        cam_header.addWidget(cam_label)
-        cam_header.addStretch()
-        layout.addLayout(cam_header)
-        
-        self.camera_frame = QFrame()
-        # Camera preview size: 180px height for better visibility
-        self.camera_frame.setFixedHeight(180)
-        self.camera_frame.setStyleSheet(f"""
-            background-color: {COLORS['bg_dark']};
-            border: 1px solid {COLORS['border']};
-            border-radius: 4px;
-        """)
-        
-        cam_layout = QVBoxLayout(self.camera_frame)
-        cam_layout.setContentsMargins(4, 4, 4, 4)
-        cam_layout.setSpacing(4)
-        
-        self.camera_image = QLabel()
-        self.camera_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_image.setStyleSheet(f"color: {COLORS['text_muted']};")
-        self.camera_image.setFont(QFont("Play", 9))
-        self.camera_image.setText("Click a printer to view camera")
-        self.camera_image.setMinimumHeight(140)  # Increased from 80
-        cam_layout.addWidget(self.camera_image)
-        
-        self.open_camera_btn = QPushButton("Open in Browser")
-        self.open_camera_btn.setFixedHeight(28)
-        self.open_camera_btn.setEnabled(False)
-        self.open_camera_btn.clicked.connect(self._open_camera)
-        cam_layout.addWidget(self.open_camera_btn)
-        
-        layout.addWidget(self.camera_frame)
-        
-        self.current_webcam_url = ""
-        
-        # Camera refresh timer
-        self.camera_timer = QTimer()
-        self.camera_timer.timeout.connect(self._refresh_camera)
-        self._camera_session = None
-        
-        # Separator
-        line2 = QFrame()
-        line2.setFrameShape(QFrame.Shape.HLine)
-        line2.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line2)
-        
-        # Statistics section
-        stats_header = QHBoxLayout()
-        stats_header.setSpacing(4)
-        stats_icon = QLabel()
-        stats_icon.setPixmap(get_icon("stats").pixmap(14, 14))
-        stats_header.addWidget(stats_icon)
-        stats_label = QLabel("STATISTICS")
-        stats_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        stats_label.setStyleSheet(f"color: {COLORS['accent']};")
-        stats_header.addWidget(stats_label)
-        stats_header.addStretch()
-        layout.addLayout(stats_header)
-        
-        stats_grid = QGridLayout()
-        stats_grid.setSpacing(1)
-        
-        # Total Print Time
-        lbl = QLabel("Total Print Time:")
-        lbl.setFont(QFont("Play", 8))
-        stats_grid.addWidget(lbl, 0, 0)
-        self.total_time_label = QLabel("--")
-        self.total_time_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
-        self.total_time_label.setStyleSheet(f"color: {COLORS['accent']};")
-        stats_grid.addWidget(self.total_time_label, 0, 1)
-        
-        # Total Filament
-        lbl = QLabel("Filament Used:")
-        lbl.setFont(QFont("Play", 8))
-        stats_grid.addWidget(lbl, 1, 0)
-        self.total_filament_label = QLabel("--")
-        self.total_filament_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
-        self.total_filament_label.setStyleSheet(f"color: {COLORS['accent']};")
-        stats_grid.addWidget(self.total_filament_label, 1, 1)
-        
-        # Print Count
-        lbl = QLabel("Print Count:")
-        lbl.setFont(QFont("Play", 8))
-        stats_grid.addWidget(lbl, 2, 0)
-        self.print_count_label = QLabel("--")
-        self.print_count_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
-        self.print_count_label.setStyleSheet(f"color: {COLORS['accent']};")
-        stats_grid.addWidget(self.print_count_label, 2, 1)
-        
-        # Success Rate
-        lbl = QLabel("Success Rate:")
-        lbl.setFont(QFont("Play", 8))
-        stats_grid.addWidget(lbl, 3, 0)
-        self.success_rate_label = QLabel("--")
-        self.success_rate_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
-        self.success_rate_label.setStyleSheet(f"color: {COLORS['success']};")
-        stats_grid.addWidget(self.success_rate_label, 3, 1)
-        
-        layout.addLayout(stats_grid)
-        
-        # Separator
-        line3 = QFrame()
-        line3.setFrameShape(QFrame.Shape.HLine)
-        line3.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line3)
-        
-        # System Info section
-        sys_header = QHBoxLayout()
-        sys_header.setSpacing(4)
-        sys_icon = QLabel()
-        sys_icon.setPixmap(get_icon("system").pixmap(14, 14))
-        sys_header.addWidget(sys_icon)
-        sys_label = QLabel("SYSTEM INFO")
-        sys_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        sys_label.setStyleSheet(f"color: {COLORS['accent']};")
-        sys_header.addWidget(sys_label)
-        sys_header.addStretch()
-        layout.addLayout(sys_header)
-        
-        sys_grid = QGridLayout()
-        sys_grid.setSpacing(1)
-        
-        lbl = QLabel("Klipper:")
-        lbl.setFont(QFont("Play", 8))
-        sys_grid.addWidget(lbl, 0, 0)
-        self.klipper_ver_label = QLabel("--")
-        self.klipper_ver_label.setFont(QFont("Play", 8))
-        sys_grid.addWidget(self.klipper_ver_label, 0, 1)
-        
-        lbl = QLabel("Moonraker:")
-        lbl.setFont(QFont("Play", 8))
-        sys_grid.addWidget(lbl, 1, 0)
-        self.moonraker_ver_label = QLabel("--")
-        self.moonraker_ver_label.setFont(QFont("Play", 8))
-        sys_grid.addWidget(self.moonraker_ver_label, 1, 1)
-        
-        lbl = QLabel("OS:")
-        lbl.setFont(QFont("Play", 8))
-        sys_grid.addWidget(lbl, 2, 0)
-        self.os_label = QLabel("--")
-        self.os_label.setFont(QFont("Play", 8))
-        sys_grid.addWidget(self.os_label, 2, 1)
-        
-        layout.addLayout(sys_grid)
-        
-        # Disk usage
-        disk_layout = QHBoxLayout()
-        lbl = QLabel("Disk:")
-        lbl.setFont(QFont("Play", 8))
-        disk_layout.addWidget(lbl)
-        self.disk_label = QLabel("-- / --")
-        self.disk_label.setFont(QFont("Play", 8))
-        disk_layout.addWidget(self.disk_label)
-        layout.addLayout(disk_layout)
-        
-        self.disk_bar = QProgressBar()
-        self.disk_bar.setRange(0, 100)
-        self.disk_bar.setValue(0)
-        self.disk_bar.setFixedHeight(8)
-        self.disk_bar.setTextVisible(False)
-        layout.addWidget(self.disk_bar)
-        
-        # Separator
-        line_mmu = QFrame()
-        line_mmu.setFrameShape(QFrame.Shape.HLine)
-        line_mmu.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line_mmu)
-        
-        # Multi-Color Unit section (MMU/ERCF/AFC)
-        self.mmu_section = QWidget()
-        mmu_layout = QVBoxLayout(self.mmu_section)
-        mmu_layout.setContentsMargins(0, 0, 0, 0)
-        mmu_layout.setSpacing(2)
-        
-        self.mmu_label = QLabel("🎨 MULTI-COLOR UNIT")
-        self.mmu_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        self.mmu_label.setStyleSheet(f"color: {COLORS['accent']};")
-        mmu_layout.addWidget(self.mmu_label)
-        
-        self.mmu_frame = QFrame()
-        self.mmu_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_dark']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-        """)
-        mmu_frame_layout = QVBoxLayout(self.mmu_frame)
-        mmu_frame_layout.setContentsMargins(4, 4, 4, 4)
-        mmu_frame_layout.setSpacing(2)
-        
-        # MMU Type
-        mmu_type_layout = QHBoxLayout()
-        lbl = QLabel("Type:")
-        lbl.setFont(QFont("Play", 8))
-        mmu_type_layout.addWidget(lbl)
-        self.mmu_type_label = QLabel("--")
-        self.mmu_type_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
-        self.mmu_type_label.setStyleSheet(f"color: {COLORS['accent']};")
-        mmu_type_layout.addWidget(self.mmu_type_label)
-        mmu_type_layout.addStretch()
-        mmu_frame_layout.addLayout(mmu_type_layout)
-        
-        # Gate info
-        mmu_gate_layout = QHBoxLayout()
-        lbl = QLabel("Gates:")
-        lbl.setFont(QFont("Play", 8))
-        mmu_gate_layout.addWidget(lbl)
-        self.mmu_gate_label = QLabel("--")
-        self.mmu_gate_label.setFont(QFont("Play", 8))
-        mmu_gate_layout.addWidget(self.mmu_gate_label)
-        mmu_gate_layout.addStretch()
-        mmu_frame_layout.addLayout(mmu_gate_layout)
-        
-        # Current gate
-        mmu_current_layout = QHBoxLayout()
-        lbl = QLabel("Current:")
-        lbl.setFont(QFont("Play", 8))
-        mmu_current_layout.addWidget(lbl)
-        self.mmu_current_label = QLabel("--")
-        self.mmu_current_label.setFont(QFont("Play", 8, QFont.Weight.Bold))
-        self.mmu_current_label.setStyleSheet(f"color: {COLORS['success']};")
-        mmu_current_layout.addWidget(self.mmu_current_label)
-        mmu_current_layout.addStretch()
-        mmu_frame_layout.addLayout(mmu_current_layout)
-        
-        # Filament loaded status
-        self.mmu_loaded_label = QLabel("● Filament: --")
-        self.mmu_loaded_label.setFont(QFont("Play", 8))
-        mmu_frame_layout.addWidget(self.mmu_loaded_label)
-        
-        mmu_layout.addWidget(self.mmu_frame)
-        
-        layout.addWidget(self.mmu_section)
-        self.mmu_section.setVisible(False)  # Hidden by default
-        
-        # Separator
-        line4 = QFrame()
-        line4.setFrameShape(QFrame.Shape.HLine)
-        line4.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line4)
-        
-        # Tuning Advisor section
-        tuning_header = QHBoxLayout()
-        tuning_header.setSpacing(4)
-        tuning_icon = QLabel()
-        tuning_icon.setPixmap(get_icon("tuning").pixmap(14, 14))
-        tuning_header.addWidget(tuning_icon)
-        tuning_label = QLabel("TUNING ADVISOR")
-        tuning_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        tuning_label.setStyleSheet(f"color: {COLORS['accent']};")
-        tuning_header.addWidget(tuning_label)
-        tuning_header.addStretch()
-        layout.addLayout(tuning_header)
-        
-        # PID Warning
-        self.pid_warning_frame = QFrame()
-        self.pid_warning_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_dark']};
-                border: 1px solid {COLORS['warning']};
-                border-radius: 4px;
-                padding: 4px;
-            }}
-        """)
-        self.pid_warning_frame.setVisible(False)
-        pid_warning_layout = QVBoxLayout(self.pid_warning_frame)
-        pid_warning_layout.setContentsMargins(6, 6, 6, 6)
-        pid_warning_layout.setSpacing(2)
-        
-        self.pid_warning_label = QLabel("⚠️ Temperature fluctuation detected")
-        self.pid_warning_label.setFont(QFont("Play", 9))
-        self.pid_warning_label.setStyleSheet(f"color: {COLORS['warning']};")
-        self.pid_warning_label.setWordWrap(True)
-        pid_warning_layout.addWidget(self.pid_warning_label)
-        
-        pid_btn_layout = QHBoxLayout()
-        self.pid_hotend_btn = QPushButton("PID Tune Hotend")
-        self.pid_hotend_btn.setFixedHeight(28)
-        self.pid_hotend_btn.clicked.connect(lambda: self._run_pid_calibrate('extruder'))
-        pid_btn_layout.addWidget(self.pid_hotend_btn)
-        
-        self.pid_bed_btn = QPushButton("PID Tune Bed")
-        self.pid_bed_btn.setFixedHeight(28)
-        self.pid_bed_btn.clicked.connect(lambda: self._run_pid_calibrate('heater_bed'))
-        pid_btn_layout.addWidget(self.pid_bed_btn)
-        pid_warning_layout.addLayout(pid_btn_layout)
-        
-        layout.addWidget(self.pid_warning_frame)
-        
-        # Input Shaper section
-        self.shaper_frame = QFrame()
-        self.shaper_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_dark']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-        """)
-        shaper_layout = QVBoxLayout(self.shaper_frame)
-        shaper_layout.setContentsMargins(4, 4, 4, 4)
-        shaper_layout.setSpacing(1)
-        
-        shaper_title = QLabel("Input Shaper")
-        shaper_title.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        shaper_title.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        shaper_layout.addWidget(shaper_title)
-        
-        shaper_grid = QGridLayout()
-        shaper_grid.setSpacing(2)
-        
-        lbl = QLabel("X Axis:")
-        lbl.setFont(QFont("Play", 8))
-        shaper_grid.addWidget(lbl, 0, 0)
-        self.shaper_x_label = QLabel("--")
-        self.shaper_x_label.setFont(QFont("Play", 8))
-        self.shaper_x_label.setStyleSheet(f"color: {COLORS['accent']};")
-        shaper_grid.addWidget(self.shaper_x_label, 0, 1)
-        
-        lbl = QLabel("Y Axis:")
-        lbl.setFont(QFont("Play", 8))
-        shaper_grid.addWidget(lbl, 1, 0)
-        self.shaper_y_label = QLabel("--")
-        self.shaper_y_label.setFont(QFont("Play", 8))
-        self.shaper_y_label.setStyleSheet(f"color: {COLORS['accent']};")
-        shaper_grid.addWidget(self.shaper_y_label, 1, 1)
-        
-        # Max acceleration recommendations
-        lbl = QLabel("Max Accel X:")
-        lbl.setFont(QFont("Play", 8))
-        shaper_grid.addWidget(lbl, 2, 0)
-        self.shaper_accel_x_label = QLabel("--")
-        self.shaper_accel_x_label.setFont(QFont("Play", 8))
-        self.shaper_accel_x_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        shaper_grid.addWidget(self.shaper_accel_x_label, 2, 1)
-        
-        lbl = QLabel("Max Accel Y:")
-        lbl.setFont(QFont("Play", 8))
-        shaper_grid.addWidget(lbl, 3, 0)
-        self.shaper_accel_y_label = QLabel("--")
-        self.shaper_accel_y_label.setFont(QFont("Play", 8))
-        self.shaper_accel_y_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        shaper_grid.addWidget(self.shaper_accel_y_label, 3, 1)
-        
-        shaper_layout.addLayout(shaper_grid)
-        
-        # Shaper advice label
-        self.shaper_advice_label = QLabel("")
-        self.shaper_advice_label.setFont(QFont("Play", 8))
-        self.shaper_advice_label.setWordWrap(True)
-        self.shaper_advice_label.setStyleSheet(f"color: {COLORS['warning']}; padding: 2px;")
-        self.shaper_advice_label.setVisible(False)
-        shaper_layout.addWidget(self.shaper_advice_label)
-        
-        # Buttons row
-        shaper_btn_layout = QHBoxLayout()
-        shaper_btn_layout.setSpacing(4)
-        
-        self.shaper_calibrate_btn = QPushButton("Calibrate")
-        self.shaper_calibrate_btn.setFixedHeight(28)
-        self.shaper_calibrate_btn.setToolTip("Run SHAPER_CALIBRATE macro")
-        self.shaper_calibrate_btn.clicked.connect(self._run_shaper_calibrate)
-        self.shaper_calibrate_btn.setEnabled(False)
-        shaper_btn_layout.addWidget(self.shaper_calibrate_btn)
-        
-        self.save_shaper_graph_btn = QPushButton("Graph")
-        self.save_shaper_graph_btn.setFixedHeight(28)
-        self.save_shaper_graph_btn.clicked.connect(self._save_shaper_graph)
-        self.save_shaper_graph_btn.setEnabled(False)
-        self.save_shaper_graph_btn.setToolTip("Save Input Shaper calibration graph (requires Shake&Tune)")
-        shaper_btn_layout.addWidget(self.save_shaper_graph_btn)
-        
-        shaper_layout.addLayout(shaper_btn_layout)
-        
-        layout.addWidget(self.shaper_frame)
-        
-        # Separator before Log Analyzer
-        line5 = QFrame()
-        line5.setFrameShape(QFrame.Shape.HLine)
-        line5.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line5)
-        
-        # Log Analyzer section
-        log_header = QHBoxLayout()
-        log_header.setSpacing(4)
-        log_icon = QLabel()
-        log_icon.setPixmap(get_icon("log").pixmap(14, 14))
-        log_header.addWidget(log_icon)
-        log_label = QLabel("LOG ANALYZER")
-        log_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        log_label.setStyleSheet(f"color: {COLORS['accent']};")
-        log_header.addWidget(log_label)
-        log_header.addStretch()
-        layout.addLayout(log_header)
-        
-        log_frame = QFrame()
-        log_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLORS['bg_dark']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-        """)
-        log_layout = QVBoxLayout(log_frame)
-        log_layout.setContentsMargins(4, 4, 4, 4)
-        log_layout.setSpacing(2)
-        
-        # Log status
-        self.log_status_label = QLabel("No log analyzed yet")
-        self.log_status_label.setFont(QFont("Play", 8))
-        self.log_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.log_status_label.setWordWrap(True)
-        log_layout.addWidget(self.log_status_label)
-        
-        # Error/Warning counts
-        log_stats_layout = QHBoxLayout()
-        self.log_errors_label = QLabel("⚠️ Errors: --")
-        self.log_errors_label.setFont(QFont("Play", 8))
-        self.log_errors_label.setStyleSheet(f"color: {COLORS['error']};")
-        log_stats_layout.addWidget(self.log_errors_label)
-        
-        self.log_warnings_label = QLabel("⚠️ Warnings: --")
-        self.log_warnings_label.setFont(QFont("Play", 8))
-        self.log_warnings_label.setStyleSheet(f"color: {COLORS['warning']};")
-        log_stats_layout.addWidget(self.log_warnings_label)
-        log_layout.addLayout(log_stats_layout)
-        
-        # Analyze Log button
-        self.analyze_log_btn = QPushButton("🔍 Analyze Log")
-        self.analyze_log_btn.setFixedHeight(28)
-        self.analyze_log_btn.setStyleSheet(f"""
+        # Header with name and status indicator
+        header = QHBoxLayout()
+        
+        self.status_indicator = QLabel("●")
+        self.status_indicator.setFont(QFont("Arial", 14))
+        header.addWidget(self.status_indicator)
+        
+        self.name_label = QLabel(self.config.name or self.config.host)
+        self.name_label.setFont(QFont("Play", 11 if self.compact_mode else 12, QFont.Weight.Bold))
+        self.name_label.setStyleSheet(f"color: {COLORS['accent']};")
+        self.name_label.setMaximumWidth(140 if self.compact_mode else 200)
+        self.name_label.setToolTip(self.config.name or self.config.host)
+        header.addWidget(self.name_label)
+        header.addStretch()
+        
+        self.state_label = QLabel("OFFLINE")
+        self.state_label.setFont(QFont("Play", 10, QFont.Weight.Bold))
+        header.addWidget(self.state_label)
+        
+        layout.addLayout(header)
+        
+        # Camera + Thumbnail section (horizontal layout)
+        if not self.compact_mode:
+            media_container = QHBoxLayout()
+            media_container.setSpacing(4)
+            
+            # Camera preview
+            self.camera_frame = QFrame()
+            self.camera_frame.setFixedSize(150, 100)
+            self.camera_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: #0a0a0a;
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                }}
+            """)
+            camera_layout = QHBoxLayout(self.camera_frame)
+            camera_layout.setContentsMargins(0, 0, 0, 0)
+            camera_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            self.camera_preview = QLabel("No Camera")
+            self.camera_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.camera_preview.setScaledContents(False)
+            self.camera_preview.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
+            camera_layout.addWidget(self.camera_preview)
+            media_container.addWidget(self.camera_frame)
+            
+            # Thumbnail preview
+            self.thumbnail_frame = QFrame()
+            self.thumbnail_frame.setFixedSize(100, 100)
+            self.thumbnail_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: #0a0a0a;
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                }}
+            """)
+            thumb_layout = QHBoxLayout(self.thumbnail_frame)
+            thumb_layout.setContentsMargins(0, 0, 0, 0)
+            thumb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            self.thumbnail_label = QLabel("No Print")
+            self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.thumbnail_label.setScaledContents(False)
+            self.thumbnail_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
+            thumb_layout.addWidget(self.thumbnail_label)
+            media_container.addWidget(self.thumbnail_frame)
+            
+            # Circular progress
+            self.circular_progress = CircularProgress(60)
+            media_container.addWidget(self.circular_progress)
+            
+            layout.addLayout(media_container)
+        else:
+            self.camera_frame = None
+            self.camera_preview = None
+            self.thumbnail_frame = None
+            self.thumbnail_label = None
+            self.circular_progress = CircularProgress(50)
+            
+            # In compact mode, show circular progress at top right area
+            compact_progress_layout = QHBoxLayout()
+            compact_progress_layout.addStretch()
+            compact_progress_layout.addWidget(self.circular_progress)
+            layout.addLayout(compact_progress_layout)
+        
+        # Separator line
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
+        layout.addWidget(line)
+        
+        # Compact temperature section - single row
+        temp_row = QHBoxLayout()
+        temp_row.setSpacing(4)
+        
+        # Extruder temp (compact)
+        ext_icon = QLabel()
+        ext_icon_path = resource_path("icons/hotend.svg")
+        if os.path.exists(ext_icon_path):
+            ext_pixmap = QPixmap(ext_icon_path).scaled(14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            ext_icon.setPixmap(ext_pixmap)
+        else:
+            ext_icon.setText("●")
+            ext_icon.setStyleSheet(f"color: {COLORS['temp_hotend']};")
+            ext_icon.setFont(QFont("Arial", 10))
+        temp_row.addWidget(ext_icon)
+        
+        self.ext_label = QLabel("T0")
+        self.ext_label.setFont(QFont("Play", 8))
+        self.ext_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_row.addWidget(self.ext_label)
+        
+        self.ext_temp_label = QLabel("--°C")
+        self.ext_temp_label.setFont(QFont("Play", 9))
+        self.ext_temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        temp_row.addWidget(self.ext_temp_label)
+        
+        temp_row.addSpacing(8)
+        
+        # Bed temp (compact)
+        bed_icon = QLabel()
+        bed_icon_path = resource_path("icons/bed.svg")
+        if os.path.exists(bed_icon_path):
+            bed_pixmap = QPixmap(bed_icon_path).scaled(14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            bed_icon.setPixmap(bed_pixmap)
+        else:
+            bed_icon.setText("●")
+            bed_icon.setStyleSheet(f"color: {COLORS['temp_bed']};")
+            bed_icon.setFont(QFont("Arial", 10))
+        temp_row.addWidget(bed_icon)
+        
+        bed_label = QLabel("Bed")
+        bed_label.setFont(QFont("Play", 8))
+        bed_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_row.addWidget(bed_label)
+        
+        self.bed_temp_label = QLabel("--°C")
+        self.bed_temp_label.setFont(QFont("Play", 9))
+        self.bed_temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        temp_row.addWidget(self.bed_temp_label)
+        
+        temp_row.addSpacing(8)
+        
+        # Chamber temp (compact)
+        chamber_icon = QLabel()
+        chamber_icon_path = resource_path("icons/chamber.svg")
+        if os.path.exists(chamber_icon_path):
+            chamber_pixmap = QPixmap(chamber_icon_path).scaled(14, 14, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            chamber_icon.setPixmap(chamber_pixmap)
+        else:
+            chamber_icon.setText("●")
+            chamber_icon.setStyleSheet(f"color: {COLORS['temp_chamber']};")
+            chamber_icon.setFont(QFont("Arial", 10))
+        temp_row.addWidget(chamber_icon)
+        
+        chamber_label = QLabel("Ch")
+        chamber_label.setFont(QFont("Play", 8))
+        chamber_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        temp_row.addWidget(chamber_label)
+        
+        self.chamber_temp_label = QLabel("--°C")
+        self.chamber_temp_label.setFont(QFont("Play", 9))
+        self.chamber_temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+        temp_row.addWidget(self.chamber_temp_label)
+        
+        temp_row.addStretch()
+        layout.addLayout(temp_row)
+        
+        # Multi-extruder row (T1, T2, T3 shown horizontally - hidden by default)
+        self.temp_container = QWidget()
+        self.temp_layout = QVBoxLayout(self.temp_container)
+        self.temp_layout.setContentsMargins(0, 0, 0, 0)
+        self.temp_layout.setSpacing(2)
+        
+        self.multi_ext_row_widget = QWidget()
+        multi_ext_layout = QHBoxLayout(self.multi_ext_row_widget)
+        multi_ext_layout.setContentsMargins(0, 0, 0, 0)
+        multi_ext_layout.setSpacing(4)
+        
+        self.multi_ext_labels = []
+        for i in range(1, 6):
+            label = QLabel(f"T{i}")
+            label.setFont(QFont("Play", 8))
+            label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+            multi_ext_layout.addWidget(label)
+            
+            temp_label = QLabel("--°C")
+            temp_label.setFont(QFont("Play", 8))
+            temp_label.setStyleSheet(f"color: {COLORS['text_primary']};")
+            multi_ext_layout.addWidget(temp_label)
+            
+            if i < 5:
+                sep = QLabel("|")
+                sep.setFont(QFont("Play", 8))
+                sep.setStyleSheet(f"color: {COLORS['text_muted']};")
+                multi_ext_layout.addWidget(sep)
+            
+            self.multi_ext_labels.append((label, temp_label))
+        
+        multi_ext_layout.addStretch()
+        self.multi_ext_row_widget.setVisible(False)
+        self.temp_layout.addWidget(self.multi_ext_row_widget)
+        layout.addWidget(self.temp_container)
+        
+        # Print info section (filename + ETA in one row)
+        print_info_row = QHBoxLayout()
+        
+        self.filename_label = QLabel("No active print")
+        self.filename_label.setFont(QFont("Play", 9))
+        self.filename_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.filename_label.setWordWrap(False)
+        self.filename_label.setMaximumWidth(180 if self.compact_mode else 220)
+        print_info_row.addWidget(self.filename_label)
+        
+        print_info_row.addStretch()
+        
+        self.eta_label = QLabel("ETA: --:--:--")
+        self.eta_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.eta_label.setFont(QFont("Play", 9))
+        print_info_row.addWidget(self.eta_label)
+        
+        layout.addLayout(print_info_row)
+        
+        # Keep progress_bar and progress_label for compatibility (hidden)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        
+        self.progress_label = QLabel("0%")
+        self.progress_label.setVisible(False)
+        
+        layout.addStretch()
+        
+        # Action buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        
+        # Camera button
+        self.camera_btn = QPushButton()
+        self.camera_btn.setIcon(get_icon("camera"))
+        self.camera_btn.setIconSize(QPixmap(20, 20).size())
+        self.camera_btn.setFixedSize(40, 32)
+        self.camera_btn.setToolTip("View Camera")
+        self.camera_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['accent']};
+                background-color: {COLORS['bg_dark']};
                 border: 1px solid {COLORS['accent']};
                 border-radius: 4px;
-                font-weight: bold;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['accent']};
-                color: {COLORS['bg_dark']};
-            }}
-            QPushButton:disabled {{
-                color: {COLORS['text_muted']};
-                border-color: {COLORS['text_muted']};
             }}
         """)
-        self.analyze_log_btn.clicked.connect(self._analyze_log)
-        self.analyze_log_btn.setEnabled(False)
-        log_layout.addWidget(self.analyze_log_btn)
+        self.camera_btn.clicked.connect(self._on_camera_click)
+        self.camera_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.camera_btn.customContextMenuRequested.connect(self._show_camera_menu)
+        btn_layout.addWidget(self.camera_btn)
         
-        # Download Log button
-        self.download_log_btn = QPushButton("💾 Download Log")
-        self.download_log_btn.setFixedHeight(28)
-        self.download_log_btn.setStyleSheet(f"""
+        # Graph button
+        self.graph_btn = QPushButton()
+        self.graph_btn.setIcon(get_icon("graph"))
+        self.graph_btn.setIconSize(QPixmap(20, 20).size())
+        self.graph_btn.setFixedSize(40, 32)
+        self.graph_btn.setToolTip("Temperature Graph")
+        self.graph_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['text_secondary']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['bg_hover']};
-                color: {COLORS['text_primary']};
-            }}
-            QPushButton:disabled {{
-                color: {COLORS['text_muted']};
-                border-color: {COLORS['text_muted']};
-            }}
-        """)
-        self.download_log_btn.clicked.connect(self._download_log)
-        self.download_log_btn.setEnabled(False)
-        log_layout.addWidget(self.download_log_btn)
-        
-        # Credit for Klipper Log Visualizer
-        log_credit = QLabel("Powered by <a href='https://sineos.github.io/' style='color: #0ABAB5;'>Klipper Log Visualizer</a> by sineos")
-        log_credit.setFont(QFont("Play", 8))
-        log_credit.setStyleSheet(f"color: {COLORS['text_muted']};")
-        log_credit.setOpenExternalLinks(True)
-        log_layout.addWidget(log_credit)
-        
-        layout.addWidget(log_frame)
-        
-        # Separator before Config Backup
-        line6 = QFrame()
-        line6.setFrameShape(QFrame.Shape.HLine)
-        line6.setStyleSheet(f"background-color: {COLORS['border']}; max-height: 1px;")
-        layout.addWidget(line6)
-        
-        # Config Backup section
-        backup_header = QHBoxLayout()
-        backup_header.setSpacing(4)
-        backup_icon = QLabel()
-        backup_icon.setPixmap(get_icon("backup").pixmap(14, 14))
-        backup_header.addWidget(backup_icon)
-        backup_label = QLabel("CONFIG BACKUP")
-        backup_label.setFont(QFont("Play", 9, QFont.Weight.Bold))
-        backup_label.setStyleSheet(f"color: {COLORS['accent']};")
-        backup_header.addWidget(backup_label)
-        backup_header.addStretch()
-        layout.addLayout(backup_header)
-        
-        backup_frame = QFrame()
-        backup_frame.setStyleSheet(f"""
-            QFrame {{
                 background-color: {COLORS['bg_dark']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            }}
-        """)
-        backup_layout = QVBoxLayout(backup_frame)
-        backup_layout.setContentsMargins(4, 4, 4, 4)
-        backup_layout.setSpacing(2)
-        
-        # Backup status
-        self.backup_status_label = QLabel("Backup printer.cfg and configs")
-        self.backup_status_label.setFont(QFont("Play", 8))
-        self.backup_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        self.backup_status_label.setWordWrap(True)
-        backup_layout.addWidget(self.backup_status_label)
-        
-        # Backup button
-        self.backup_config_btn = QPushButton("📦 Backup Configs")
-        self.backup_config_btn.setFixedHeight(28)
-        self.backup_config_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['accent']};
                 border: 1px solid {COLORS['accent']};
                 border-radius: 4px;
-                font-weight: bold;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['accent']};
-                color: {COLORS['bg_dark']};
-            }}
-            QPushButton:disabled {{
-                color: {COLORS['text_muted']};
-                border-color: {COLORS['text_muted']};
             }}
         """)
-        self.backup_config_btn.clicked.connect(self._backup_configs)
-        self.backup_config_btn.setEnabled(False)
-        backup_layout.addWidget(self.backup_config_btn)
+        self.graph_btn.clicked.connect(self._on_graph_click)
+        btn_layout.addWidget(self.graph_btn)
         
-        layout.addWidget(backup_frame)
+        # Web button
+        self.web_btn = QPushButton()
+        self.web_btn.setIcon(get_icon("web"))
+        self.web_btn.setIconSize(QPixmap(20, 20).size())
+        self.web_btn.setFixedSize(40, 32)
+        self.web_btn.setToolTip("Open Web Interface")
+        self.web_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
+        self.web_btn.clicked.connect(self._on_web_click)
+        btn_layout.addWidget(self.web_btn)
         
-        # Set content widget to scroll area and add to main layout
-        scroll_area.setWidget(content_widget)
-        main_layout.addWidget(scroll_area)
+        # Login button (hidden by default)
+        self.login_btn = QPushButton("🔐")
+        self.login_btn.setFixedSize(40, 32)
+        self.login_btn.setToolTip("Login Required")
+        self.login_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid #ff8800;
+                border-radius: 4px;
+                color: #ff8800;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: #ff8800;
+                color: {COLORS['bg_dark']};
+            }}
+        """)
+        self.login_btn.clicked.connect(self._on_login_click)
+        self.login_btn.setVisible(False)
+        btn_layout.addWidget(self.login_btn)
         
-        # Store temperature history for PID warning
-        self._temp_history_hotend: deque = deque(maxlen=30)
-        self._temp_history_bed: deque = deque(maxlen=30)
-        self._current_printer_config = None
+        btn_layout.addStretch()
         
-        # Signal for G-code commands
-        self.gcode_requested = None  # Will be set by MainWindow
-    
+        layout.addLayout(btn_layout)
+        
+        # Host info
+        self.host_label = QLabel(f"{self.config.host}:{self.config.port}")
+        self.host_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 9px;")
+        layout.addWidget(self.host_label)
+
+
     def _apply_style(self):
         self.setStyleSheet(f"""
             StatsPanel {{
