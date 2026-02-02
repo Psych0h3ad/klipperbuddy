@@ -3358,29 +3358,27 @@ class StatsPanel(QFrame):
             self.log_status_label.setStyleSheet(f"color: {COLORS['error']};")
     
     def _backup_configs(self):
-        """Backup all Klipper configuration files"""
-        print(f"[DEBUG] _backup_configs called")
-        print(f"[DEBUG] _current_printer_config: {self._current_printer_config}")
-        
+        """Backup all Klipper configuration files using synchronous HTTP requests"""
         if not self._current_printer_config:
-            print(f"[DEBUG] No printer config, returning")
+            QMessageBox.warning(self, "Error", "No printer selected. Please select a printer first.")
             return
         
-        print(f"[DEBUG] Printer: {self._current_printer_config.host}:{self._current_printer_config.port}")
-        
         from pathlib import Path
+        import zipfile
+        from datetime import datetime
+        import urllib.request
+        import json
+        
+        # Get save directory
         default_path = Path.home() / "Documents" / "KlipperBuddy" / "backups"
         default_path.mkdir(parents=True, exist_ok=True)
         
-        print(f"[DEBUG] Opening directory dialog...")
         save_dir = QFileDialog.getExistingDirectory(
             self, "Select Backup Directory",
             str(default_path)
         )
         
-        print(f"[DEBUG] Selected directory: {save_dir}")
         if not save_dir:
-            print(f"[DEBUG] No directory selected, returning")
             return
         
         self.backup_status_label.setText("Backing up...")
@@ -3388,41 +3386,73 @@ class StatsPanel(QFrame):
         QApplication.processEvents()
         
         try:
-            import asyncio
-            print(f"[DEBUG] Creating MoonrakerClient...")
-            client = MoonrakerClient(
-                self._current_printer_config.host,
-                self._current_printer_config.port,
-                api_key="",  # No API key needed for config backup
-                username=self._current_printer_config.username or "",
-                password=self._current_printer_config.password or ""
-            )
+            base_url = f"http://{self._current_printer_config.host}:{self._current_printer_config.port}"
             
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(client.backup_all_configs(save_dir))
-            finally:
-                loop.close()
+            # Get list of config files
+            list_url = f"{base_url}/server/files/list?root=config"
+            req = urllib.request.Request(list_url, headers={'User-Agent': 'KlipperBuddy'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
             
-            if result['success']:
-                self.backup_status_label.setText(f"Backed up {result['files_backed_up']} files")
+            if 'result' not in data:
+                raise Exception("Failed to get config file list")
+            
+            files = data['result']
+            if not files:
+                raise Exception("No configuration files found")
+            
+            # Create zip file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            printer_name = self._current_printer_config.host.replace('.', '_').replace(':', '_')
+            zip_filename = f"klipper_backup_{printer_name}_{timestamp}.zip"
+            zip_path = Path(save_dir) / zip_filename
+            
+            files_backed_up = 0
+            errors = []
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for i, file_info in enumerate(files):
+                    filename = file_info.get('path', '')
+                    if not filename:
+                        continue
+                    
+                    # Update progress
+                    self.backup_status_label.setText(f"Backing up {i+1}/{len(files)}...")
+                    QApplication.processEvents()
+                    
+                    try:
+                        # Download file
+                        import urllib.parse
+                        encoded_filename = urllib.parse.quote(filename, safe='')
+                        file_url = f"{base_url}/server/files/config/{encoded_filename}"
+                        req = urllib.request.Request(file_url, headers={'User-Agent': 'KlipperBuddy'})
+                        with urllib.request.urlopen(req, timeout=30) as response:
+                            content = response.read()
+                        
+                        zipf.writestr(filename, content)
+                        files_backed_up += 1
+                    except Exception as e:
+                        errors.append(f"Failed to backup {filename}: {str(e)}")
+            
+            if files_backed_up > 0:
+                self.backup_status_label.setText(f"Backed up {files_backed_up} files")
                 self.backup_status_label.setStyleSheet(f"color: {COLORS['success']};")
                 
                 QMessageBox.information(
                     self, "Backup Complete",
-                    f"Successfully backed up {result['files_backed_up']} configuration files.\n\n"
-                    f"Saved to:\n{result['backup_path']}"
+                    f"Successfully backed up {files_backed_up} configuration files.\n\n"
+                    f"Saved to:\n{zip_path}"
                 )
             else:
-                errors = '\n'.join(result['errors'][:3])
                 self.backup_status_label.setText("Backup failed")
                 self.backup_status_label.setStyleSheet(f"color: {COLORS['error']};")
-                QMessageBox.warning(self, "Backup Failed", f"Errors:\n{errors}")
+                error_msg = '\n'.join(errors[:3]) if errors else "Unknown error"
+                QMessageBox.warning(self, "Backup Failed", f"Errors:\n{error_msg}")
                 
         except Exception as e:
             self.backup_status_label.setText(f"Error: {str(e)[:50]}")
             self.backup_status_label.setStyleSheet(f"color: {COLORS['error']};")
+            QMessageBox.warning(self, "Backup Error", f"Failed to backup configs:\n{str(e)}")
         finally:
             self.backup_config_btn.setEnabled(True)
 
