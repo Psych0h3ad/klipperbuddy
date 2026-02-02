@@ -75,6 +75,7 @@ COLORS = {
     'accent': '#0ABAB5',  # Tiffany Blue
     'accent_dark': '#088F8B',
     'accent_hover': '#0CD5D0',  # Lighter tiffany for hover
+    'accent_light': '#0CD5D0',  # Alias for accent_hover
     'accent_glow': '#0ABAB5',
     'text': '#ffffff',  # Alias for text_primary
     'text_primary': '#ffffff',
