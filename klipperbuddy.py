@@ -285,6 +285,7 @@ class SystemInfo:
     mcu_name: str = ""  # MCU type (e.g., "STM32F446", "RP2040")
     mcu_version: str = ""  # MCU firmware version
     mcu_freq: str = ""  # MCU frequency
+    mcu_list: list = None  # List of all MCUs: [(name, mcu_type, version), ...]
     # Host info
     host_cpu: str = ""  # Host CPU model (e.g., "Raspberry Pi 4")
     host_memory_total: int = 0  # bytes
@@ -1413,6 +1414,97 @@ class TemperatureChart(QWidget):
 
 
 # =============================================================================
+# Mini Temperature Chart Widget (for printer cards)
+# =============================================================================
+
+class MiniTemperatureChart(QWidget):
+    """Compact temperature chart for printer cards"""
+    
+    MAX_POINTS = 30  # 30 data points for compact display
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(60)
+        self.setMinimumWidth(100)
+        
+        self.hotend_data: deque = deque(maxlen=self.MAX_POINTS)
+        self.bed_data: deque = deque(maxlen=self.MAX_POINTS)
+        self.chamber_data: deque = deque(maxlen=self.MAX_POINTS)
+        
+        self.max_temp = 300
+    
+    def add_data(self, hotend: float, bed: float, chamber: float):
+        self.hotend_data.append(hotend)
+        self.bed_data.append(bed)
+        self.chamber_data.append(chamber)
+        
+        # Auto-scale
+        all_temps = list(self.hotend_data) + list(self.bed_data) + list(self.chamber_data)
+        if all_temps:
+            max_val = max(all_temps)
+            if max_val > 0:
+                self.max_temp = max(100, max_val + 20)
+        
+        self.update()
+    
+    def clear_data(self):
+        self.hotend_data.clear()
+        self.bed_data.clear()
+        self.chamber_data.clear()
+        self.update()
+    
+    def paintEvent(self, event: QPaintEvent):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Background
+        painter.fillRect(self.rect(), QColor(COLORS['bg_dark']))
+        
+        # Chart area (minimal margins)
+        margin_left = 5
+        margin_right = 5
+        margin_top = 5
+        margin_bottom = 5
+        chart_rect = QRect(margin_left, margin_top, 
+                          self.width() - margin_left - margin_right, 
+                          self.height() - margin_top - margin_bottom)
+        
+        # Draw subtle grid lines
+        painter.setPen(QPen(QColor(COLORS['border']), 1, Qt.PenStyle.DotLine))
+        for i in range(3):
+            y = chart_rect.top() + (chart_rect.height() * i // 2)
+            painter.drawLine(chart_rect.left(), y, chart_rect.right(), y)
+        
+        # Draw data lines
+        def draw_line(data: deque, color: str, width: int = 1):
+            if len(data) < 2:
+                return
+            
+            pen = QPen(QColor(color), width)
+            painter.setPen(pen)
+            
+            path = QPainterPath()
+            for i, temp in enumerate(data):
+                x = chart_rect.left() + (chart_rect.width() * i // (self.MAX_POINTS - 1))
+                y = chart_rect.bottom() - (chart_rect.height() * temp / self.max_temp) if self.max_temp > 0 else chart_rect.bottom()
+                
+                if i == 0:
+                    path.moveTo(x, y)
+                else:
+                    path.lineTo(x, y)
+            
+            painter.drawPath(path)
+        
+        draw_line(self.hotend_data, COLORS['temp_hotend'], 2)
+        draw_line(self.bed_data, COLORS['temp_bed'], 2)
+        draw_line(self.chamber_data, COLORS['temp_chamber'], 1)
+        
+        # Draw border
+        painter.setPen(QPen(QColor(COLORS['border']), 1))
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+
+# =============================================================================
 # Circular Progress Widget
 # =============================================================================
 
@@ -1863,7 +1955,9 @@ class PrinterCard(QFrame):
         self.temp_layout = QVBoxLayout(self.temp_container)
         self.temp_container.setVisible(False)
         
-        layout.addStretch()
+        # Mini temperature chart
+        self.mini_chart = MiniTemperatureChart()
+        layout.addWidget(self.mini_chart)
         
         # Action buttons
         btn_layout = QHBoxLayout()
@@ -2166,6 +2260,9 @@ class PrinterCard(QFrame):
         # Chamber temperature
         self.chamber_temp_label.setText(f"{status.chamber_temp:.0f}°C" if status.chamber_temp > 0 else "--°C")
         
+        # Update mini temperature chart
+        self.mini_chart.add_data(status.extruder_temp, status.bed_temp, status.chamber_temp)
+        
         # Update print info and thumbnail
         if status.filename:
             # Truncate filename if too long (shorter for compact mode)
@@ -2225,6 +2322,20 @@ class PrinterCard(QFrame):
             self.mcu_label.setText(f"MCU: {ver}")
         else:
             self.mcu_label.setText("MCU: --")
+        
+        # Add tooltip with all MCU details
+        if info.mcu_list and len(info.mcu_list) > 0:
+            tooltip_lines = ["MCU Information:"]
+            for mcu_name, mcu_type, mcu_ver in info.mcu_list:
+                if mcu_type:
+                    tooltip_lines.append(f"  {mcu_name}: {mcu_type}")
+                elif mcu_ver:
+                    tooltip_lines.append(f"  {mcu_name}: {mcu_ver[:30]}")
+                else:
+                    tooltip_lines.append(f"  {mcu_name}")
+            self.mcu_label.setToolTip("\n".join(tooltip_lines))
+        else:
+            self.mcu_label.setToolTip("")
         
         # Update Host info (CPU model + memory usage)
         if info.host_cpu:
@@ -3330,16 +3441,26 @@ class StatsPanel(QFrame):
     
     def enable_controls(self, enabled: bool = True):
         """Enable or disable printer control buttons"""
-        # Force enable/disable all control buttons
-        self.firmware_restart_btn.setEnabled(enabled)
-        self.restart_btn.setEnabled(enabled)
-        self.emergency_stop_btn.setEnabled(enabled)
-        self.analyze_log_btn.setEnabled(enabled)
-        self.download_log_btn.setEnabled(enabled)
-        self.backup_config_btn.setEnabled(enabled)
-        # Force UI update
-        self.backup_config_btn.repaint()
-        self.analyze_log_btn.repaint()
+        # Use QTimer to ensure this runs after all other UI updates
+        def _do_enable():
+            self.firmware_restart_btn.setEnabled(enabled)
+            self.restart_btn.setEnabled(enabled)
+            self.emergency_stop_btn.setEnabled(enabled)
+            self.analyze_log_btn.setEnabled(enabled)
+            self.download_log_btn.setEnabled(enabled)
+            self.backup_config_btn.setEnabled(enabled)
+            # Force UI update
+            self.backup_config_btn.repaint()
+            self.analyze_log_btn.repaint()
+            self.firmware_restart_btn.repaint()
+            self.restart_btn.repaint()
+            self.emergency_stop_btn.repaint()
+            self.download_log_btn.repaint()
+            QApplication.processEvents()
+        
+        # Execute immediately and also schedule for later to ensure it takes effect
+        _do_enable()
+        QTimer.singleShot(100, _do_enable)
     
     def _firmware_restart(self):
         """Send FIRMWARE_RESTART command"""
@@ -4283,12 +4404,41 @@ class MainWindow(QMainWindow):
         
         splitter.addWidget(left_widget)
         
-        # Right side - Stats panel (has internal scrolling)
+        # Right side - Stats panel container with toggle button
+        right_container = QWidget()
+        right_layout = QHBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        
+        # Toggle button for sidebar
+        self.sidebar_toggle_btn = QPushButton("◀")
+        self.sidebar_toggle_btn.setFixedSize(20, 60)
+        self.sidebar_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_card']};
+                color: {COLORS['accent']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['surface']};
+            }}
+        """)
+        self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
+        right_layout.addWidget(self.sidebar_toggle_btn, 0, Qt.AlignmentFlag.AlignTop)
+        
+        # Stats panel
         self.stats_panel = StatsPanel()
         self.stats_panel.setFixedWidth(300)  # Fixed width to prevent overflow
-        splitter.addWidget(self.stats_panel)
+        right_layout.addWidget(self.stats_panel)
         
-        splitter.setSizes([1100, 300])
+        self.sidebar_visible = True
+        
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_container)
+        
+        splitter.setSizes([1100, 320])
         splitter.setStretchFactor(0, 1)  # Left side stretches
         splitter.setStretchFactor(1, 0)  # Right side fixed width
         
@@ -4415,6 +4565,16 @@ class MainWindow(QMainWindow):
     
     def _on_camera_clicked(self, webcam_url: str):
         self.stats_panel.set_webcam_url(webcam_url)
+    
+    def _toggle_sidebar(self):
+        """Toggle sidebar visibility"""
+        self.sidebar_visible = not self.sidebar_visible
+        if self.sidebar_visible:
+            self.stats_panel.show()
+            self.sidebar_toggle_btn.setText("◀")
+        else:
+            self.stats_panel.hide()
+            self.sidebar_toggle_btn.setText("▶")
     
     def _on_login_requested(self, card: PrinterCard):
         """Handle login request - save config and refresh status"""
