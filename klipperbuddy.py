@@ -1457,8 +1457,10 @@ class MiniTemperatureChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Background
-        painter.fillRect(self.rect(), QColor(COLORS['bg_dark']))
+        # Background - slightly lighter for contrast
+        bg_color = QColor(COLORS['bg_dark'])
+        bg_color = bg_color.lighter(120)
+        painter.fillRect(self.rect(), bg_color)
         
         # Chart area (minimal margins)
         margin_left = 5
@@ -1470,18 +1472,17 @@ class MiniTemperatureChart(QWidget):
                           self.height() - margin_top - margin_bottom)
         
         # Draw subtle grid lines
-        painter.setPen(QPen(QColor(COLORS['border']), 1, Qt.PenStyle.DotLine))
+        grid_color = QColor(COLORS['border'])
+        grid_color.setAlpha(100)
+        painter.setPen(QPen(grid_color, 1, Qt.PenStyle.DotLine))
         for i in range(3):
             y = chart_rect.top() + (chart_rect.height() * i // 2)
             painter.drawLine(chart_rect.left(), y, chart_rect.right(), y)
         
-        # Draw data lines
-        def draw_line(data: deque, color: str, width: int = 1):
+        # Draw data lines with glow effect
+        def draw_line(data: deque, color: str, width: int = 2):
             if len(data) < 2:
                 return
-            
-            pen = QPen(QColor(color), width)
-            painter.setPen(pen)
             
             path = QPainterPath()
             for i, temp in enumerate(data):
@@ -1493,13 +1494,22 @@ class MiniTemperatureChart(QWidget):
                 else:
                     path.lineTo(x, y)
             
+            # Draw glow (thicker, semi-transparent)
+            glow_color = QColor(color)
+            glow_color.setAlpha(80)
+            painter.setPen(QPen(glow_color, width + 3))
+            painter.drawPath(path)
+            
+            # Draw main line
+            painter.setPen(QPen(QColor(color), width))
             painter.drawPath(path)
         
-        draw_line(self.hotend_data, COLORS['temp_hotend'], 2)
-        draw_line(self.bed_data, COLORS['temp_bed'], 2)
-        draw_line(self.chamber_data, COLORS['temp_chamber'], 1)
+        # Draw lines with increased width
+        draw_line(self.hotend_data, COLORS['temp_hotend'], 3)
+        draw_line(self.bed_data, COLORS['temp_bed'], 3)
+        draw_line(self.chamber_data, COLORS['temp_chamber'], 2)
         
-        # Draw border
+        # Draw border with accent color
         painter.setPen(QPen(QColor(COLORS['border']), 1))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
@@ -4410,23 +4420,25 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
         
-        # Toggle button for sidebar
+        # Toggle button for sidebar - more visible
         self.sidebar_toggle_btn = QPushButton("◀")
-        self.sidebar_toggle_btn.setFixedSize(20, 60)
+        self.sidebar_toggle_btn.setFixedSize(24, 80)
+        self.sidebar_toggle_btn.setToolTip("Toggle Sidebar")
         self.sidebar_toggle_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['accent']};
-                border: 1px solid {COLORS['border']};
+                background-color: {COLORS['accent']};
+                color: {COLORS['bg_dark']};
+                border: none;
                 border-radius: 4px;
-                font-size: 12px;
+                font-size: 14px;
+                font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: {COLORS['surface']};
+                background-color: {COLORS['accent_light']};
             }}
         """)
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
-        right_layout.addWidget(self.sidebar_toggle_btn, 0, Qt.AlignmentFlag.AlignTop)
+        right_layout.addWidget(self.sidebar_toggle_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         
         # Stats panel
         self.stats_panel = StatsPanel()
