@@ -2949,7 +2949,7 @@ class StatsPanel(QFrame):
             }}
         """)
         self.analyze_log_btn.clicked.connect(self._analyze_log)
-        self.analyze_log_btn.setEnabled(False)
+        # Keep enabled - will check for printer selection on click
         log_layout.addWidget(self.analyze_log_btn)
         
         # Download Log button
@@ -2972,7 +2972,7 @@ class StatsPanel(QFrame):
             }}
         """)
         self.download_log_btn.clicked.connect(self._download_log)
-        self.download_log_btn.setEnabled(False)
+        # Keep enabled - will check for printer selection on click
         log_layout.addWidget(self.download_log_btn)
         
         # Credit for Klipper Log Visualizer
@@ -3043,7 +3043,7 @@ class StatsPanel(QFrame):
             }}
         """)
         self.backup_config_btn.clicked.connect(self._backup_configs)
-        self.backup_config_btn.setEnabled(False)
+        # Keep enabled - will check for printer selection on click
         backup_layout.addWidget(self.backup_config_btn)
         
         layout.addWidget(backup_frame)
@@ -3436,13 +3436,12 @@ class StatsPanel(QFrame):
         self.log_status_label.setText("No log analyzed yet")
         self.log_errors_label.setText("⚠️ Errors: --")
         self.log_warnings_label.setText("⚠️ Warnings: --")
-        self.analyze_log_btn.setEnabled(False)
-        self.download_log_btn.setEnabled(False)
-        # Clear control buttons
+        # Keep log buttons enabled - they check for printer selection on click
+        # Clear control buttons (keep backup enabled - checks on click)
         self.firmware_restart_btn.setEnabled(False)
         self.restart_btn.setEnabled(False)
         self.emergency_stop_btn.setEnabled(False)
-        self.backup_config_btn.setEnabled(False)
+        # backup_config_btn stays enabled - checks for printer on click
         # Clear MMU section
         self.mmu_section.setVisible(False)
         self.mmu_type_label.setText("--")
@@ -3525,6 +3524,7 @@ class StatsPanel(QFrame):
     def _analyze_log(self):
         """Download and analyze klippy.log"""
         if not self._current_printer_config:
+            QMessageBox.warning(self, "No Printer Selected", "Please select a printer first by clicking on a printer card.")
             return
         
         self.log_status_label.setText("Downloading log...")
@@ -3574,6 +3574,7 @@ class StatsPanel(QFrame):
     def _download_log(self):
         """Download klippy.log to specified folder"""
         if not self._current_printer_config:
+            QMessageBox.warning(self, "No Printer Selected", "Please select a printer first by clicking on a printer card.")
             return
         
         # Get save path from config or use default
