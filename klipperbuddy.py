@@ -292,6 +292,8 @@ class SystemInfo:
     host_memory_total: int = 0  # bytes
     host_memory_used: int = 0  # bytes
     host_cpu_usage: float = 0.0  # percentage
+    # Network
+    mac_address: str = ""  # MAC address for unique identification
     # Uptime
     system_uptime: float = 0.0  # seconds
     # Multi-color unit info (MMU/ERCF/AFC/QIDI BOX)
@@ -314,6 +316,7 @@ class PrinterConfig:
     password: str = ""
     enabled: bool = True
     camera_enabled: bool = True  # Enable camera preview on card
+    mac_address: str = ""  # Unique identifier for the printer (from Moonraker)
 
 
 # =============================================================================
@@ -401,18 +404,20 @@ class ConfigManager:
             json.dump(data, f, indent=2)
     
     def add_printer(self, printer: PrinterConfig) -> bool:
+        # Check by MAC address first (most reliable identifier)
+        if printer.mac_address:
+            for p in self.printers:
+                if p.mac_address and p.mac_address == printer.mac_address:
+                    # Same printer, update host/port if changed
+                    if p.host != printer.host or p.port != printer.port:
+                        p.host = printer.host
+                        p.port = printer.port
+                        self.save()
+                    return False  # Not a new printer
+        # Fallback: check by host:port
         for p in self.printers:
             if p.host == printer.host and p.port == printer.port:
                 return False
-        # Check if a printer with the same name already exists (IP may have changed)
-        if printer.name:
-            for p in self.printers:
-                if p.name and p.name == printer.name:
-                    # Update the existing printer's host/port
-                    p.host = printer.host
-                    p.port = printer.port
-                    self.save()
-                    return False  # Not a new printer, just updated
         self.printers.append(printer)
         self.save()
         return True
@@ -836,6 +841,14 @@ class MoonrakerClient:
                 cpu_usage = cpu_info.get('usage', 0)
                 if cpu_usage:
                     info.host_cpu_usage = cpu_usage
+                
+                # Network info - get MAC address
+                network = sys_info.get('network', {})
+                for iface_name, iface_data in network.items():
+                    mac = iface_data.get('mac_address', '')
+                    if mac and mac != '00:00:00:00:00:00':
+                        info.mac_address = mac
+                        break  # Use first valid MAC
         except:
             pass
         
@@ -1256,11 +1269,29 @@ class NetworkScanner:
                             hostname = data.get('result', {}).get('hostname', host)
                         else:
                             hostname = host
+                        
+                        # Try to get MAC address for unique identification
+                        mac_address = ''
+                        try:
+                            sys_url = f"http://{host}:{port}/machine/system_info"
+                            async with session.get(sys_url, timeout=aiohttp.ClientTimeout(total=2)) as sys_resp:
+                                if sys_resp.status == 200:
+                                    sys_data = await sys_resp.json()
+                                    network = sys_data.get('result', {}).get('system_info', {}).get('network', {})
+                                    for iface_name, iface_data in network.items():
+                                        mac = iface_data.get('mac_address', '')
+                                        if mac and mac != '00:00:00:00:00:00':
+                                            mac_address = mac
+                                            break
+                        except:
+                            pass
+                        
                         return {
                             'host': host,
                             'port': port,
                             'hostname': hostname,
-                            'auth_required': auth_required
+                            'auth_required': auth_required,
+                            'mac_address': mac_address
                         }
         except:
             pass
@@ -2337,6 +2368,17 @@ class PrinterCard(QFrame):
     
     def update_system_info(self, info: SystemInfo):
         self.system_info = info
+        
+        # Save MAC address to config for unique identification
+        if info.mac_address and not self.config.mac_address:
+            self.config.mac_address = info.mac_address
+            # Save to config file
+            try:
+                if hasattr(self, 'parent') and hasattr(self.parent(), 'config_manager'):
+                    self.parent().config_manager.save()
+            except:
+                pass
+        
         # Update camera URL if available
         if info.webcam_url:
             self._camera_url = info.webcam_url
@@ -4313,25 +4355,37 @@ class MainWindow(QMainWindow):
                     if exists_by_host:
                         continue
                     
-                    # Check if printer exists by name (IP may have changed)
+                    # Check if printer exists by MAC address (most reliable)
+                    existing_by_mac = None
+                    scan_mac = p.get('mac_address', '')
+                    if scan_mac:
+                        for pc in self.config_manager.printers:
+                            if pc.mac_address and pc.mac_address == scan_mac:
+                                existing_by_mac = pc
+                                break
+                    
+                    # Fallback: check by name
                     existing_by_name = None
-                    if p.get('name'):
+                    if not existing_by_mac and p.get('name'):
                         for pc in self.config_manager.printers:
                             if pc.name and pc.name == p['name']:
                                 existing_by_name = pc
                                 break
                     
-                    if existing_by_name:
+                    existing = existing_by_mac or existing_by_name
+                    if existing:
                         # IP changed - update existing printer
-                        old_key = f"{existing_by_name.host}:{existing_by_name.port}"
-                        existing_by_name.host = p['host']
-                        existing_by_name.port = p['port']
+                        old_key = f"{existing.host}:{existing.port}"
+                        existing.host = p['host']
+                        existing.port = p['port']
+                        if scan_mac and not existing.mac_address:
+                            existing.mac_address = scan_mac
                         self.config_manager.save()
                         # Update card key
                         new_key = f"{p['host']}:{p['port']}"
                         if old_key in self.printer_cards:
                             card = self.printer_cards.pop(old_key)
-                            card.config = existing_by_name
+                            card.config = existing
                             self.printer_cards[new_key] = card
                         updated_count += 1
                     else:
@@ -4594,30 +4648,43 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             selected = dialog.get_selected_printers()
             for p in selected:
-                # Check if printer exists by name (IP may have changed)
+                # Check by MAC address first
+                existing_by_mac = None
+                scan_mac = p.get('mac_address', '')
+                if scan_mac:
+                    for pc in self.config_manager.printers:
+                        if pc.mac_address and pc.mac_address == scan_mac:
+                            existing_by_mac = pc
+                            break
+                
+                # Fallback: check by name
                 existing_by_name = None
-                if p.get('name'):
+                if not existing_by_mac and p.get('name'):
                     for pc in self.config_manager.printers:
                         if pc.name and pc.name == p['name']:
                             existing_by_name = pc
                             break
                 
-                if existing_by_name and (existing_by_name.host != p['host'] or existing_by_name.port != p['port']):
+                existing = existing_by_mac or existing_by_name
+                if existing and (existing.host != p['host'] or existing.port != p['port']):
                     # IP changed - update existing printer
-                    old_key = f"{existing_by_name.host}:{existing_by_name.port}"
-                    existing_by_name.host = p['host']
-                    existing_by_name.port = p['port']
+                    old_key = f"{existing.host}:{existing.port}"
+                    existing.host = p['host']
+                    existing.port = p['port']
+                    if scan_mac and not existing.mac_address:
+                        existing.mac_address = scan_mac
                     self.config_manager.save()
                     new_key = f"{p['host']}:{p['port']}"
                     if old_key in self.printer_cards:
                         card = self.printer_cards.pop(old_key)
-                        card.config = existing_by_name
+                        card.config = existing
                         self.printer_cards[new_key] = card
-                else:
+                elif not existing:
                     config = PrinterConfig(
                         name=p['name'],
                         host=p['host'],
                         port=p['port'],
+                        mac_address=scan_mac,
                         enabled=True
                     )
                     if self.config_manager.add_printer(config):
@@ -4750,6 +4817,10 @@ class MainWindow(QMainWindow):
             # Only update heavy info on full refresh
             if full_refresh and system_info:
                 card.update_system_info(system_info)
+                # Save MAC address to config for unique identification
+                if system_info.mac_address and not card.config.mac_address:
+                    card.config.mac_address = system_info.mac_address
+                    self.config_manager.save()
             if full_refresh and name:
                 card.set_name(name)
             
