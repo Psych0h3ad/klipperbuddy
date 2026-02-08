@@ -404,9 +404,29 @@ class ConfigManager:
         for p in self.printers:
             if p.host == printer.host and p.port == printer.port:
                 return False
+        # Check if a printer with the same name already exists (IP may have changed)
+        if printer.name:
+            for p in self.printers:
+                if p.name and p.name == printer.name:
+                    # Update the existing printer's host/port
+                    p.host = printer.host
+                    p.port = printer.port
+                    self.save()
+                    return False  # Not a new printer, just updated
         self.printers.append(printer)
         self.save()
         return True
+    
+    def update_printer_host(self, name: str, new_host: str, new_port: int) -> bool:
+        """Update a printer's host/port by name (for when IP changes)"""
+        for p in self.printers:
+            if p.name and p.name == name:
+                if p.host != new_host or p.port != new_port:
+                    p.host = new_host
+                    p.port = new_port
+                    self.save()
+                    return True
+        return False
     
     def remove_printer(self, host: str, port: int):
         self.printers = [p for p in self.printers if not (p.host == host and p.port == port)]
@@ -4283,13 +4303,39 @@ class MainWindow(QMainWindow):
         def on_result(printers):
             if printers:
                 added_count = 0
+                updated_count = 0
                 for p in printers:
-                    # Check if printer already exists
-                    exists = any(
+                    # Check if printer already exists by host:port
+                    exists_by_host = any(
                         pc.host == p['host'] and pc.port == p['port']
                         for pc in self.config_manager.printers
                     )
-                    if not exists:
+                    if exists_by_host:
+                        continue
+                    
+                    # Check if printer exists by name (IP may have changed)
+                    existing_by_name = None
+                    if p.get('name'):
+                        for pc in self.config_manager.printers:
+                            if pc.name and pc.name == p['name']:
+                                existing_by_name = pc
+                                break
+                    
+                    if existing_by_name:
+                        # IP changed - update existing printer
+                        old_key = f"{existing_by_name.host}:{existing_by_name.port}"
+                        existing_by_name.host = p['host']
+                        existing_by_name.port = p['port']
+                        self.config_manager.save()
+                        # Update card key
+                        new_key = f"{p['host']}:{p['port']}"
+                        if old_key in self.printer_cards:
+                            card = self.printer_cards.pop(old_key)
+                            card.config = existing_by_name
+                            self.printer_cards[new_key] = card
+                        updated_count += 1
+                    else:
+                        # Truly new printer
                         config = PrinterConfig(
                             name=p['name'],
                             host=p['host'],
@@ -4300,8 +4346,13 @@ class MainWindow(QMainWindow):
                             self._add_printer_card(config)
                             added_count += 1
                 
-                if added_count > 0:
-                    self.status_label.setText(f"Found {added_count} new printer(s)")
+                if added_count > 0 or updated_count > 0:
+                    parts = []
+                    if added_count > 0:
+                        parts.append(f"{added_count} new")
+                    if updated_count > 0:
+                        parts.append(f"{updated_count} updated")
+                    self.status_label.setText(f"Found {', '.join(parts)} printer(s)")
                 else:
                     self.status_label.setText(f"Scan complete - {len(printers)} printer(s) online")
                 self._refresh_all_status()
@@ -4543,14 +4594,34 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             selected = dialog.get_selected_printers()
             for p in selected:
-                config = PrinterConfig(
-                    name=p['name'],
-                    host=p['host'],
-                    port=p['port'],
-                    enabled=True
-                )
-                if self.config_manager.add_printer(config):
-                    self._add_printer_card(config)
+                # Check if printer exists by name (IP may have changed)
+                existing_by_name = None
+                if p.get('name'):
+                    for pc in self.config_manager.printers:
+                        if pc.name and pc.name == p['name']:
+                            existing_by_name = pc
+                            break
+                
+                if existing_by_name and (existing_by_name.host != p['host'] or existing_by_name.port != p['port']):
+                    # IP changed - update existing printer
+                    old_key = f"{existing_by_name.host}:{existing_by_name.port}"
+                    existing_by_name.host = p['host']
+                    existing_by_name.port = p['port']
+                    self.config_manager.save()
+                    new_key = f"{p['host']}:{p['port']}"
+                    if old_key in self.printer_cards:
+                        card = self.printer_cards.pop(old_key)
+                        card.config = existing_by_name
+                        self.printer_cards[new_key] = card
+                else:
+                    config = PrinterConfig(
+                        name=p['name'],
+                        host=p['host'],
+                        port=p['port'],
+                        enabled=True
+                    )
+                    if self.config_manager.add_printer(config):
+                        self._add_printer_card(config)
             self._refresh_all_status()
     
     def _show_add_dialog(self):
